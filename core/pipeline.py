@@ -415,8 +415,11 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
         conn.close()
         return 1
 
-    # 9. Advance stage
-    advance_stage(board, stage, prefix, slug, name, stage_order)
+    # 9. PAS d'advance ici — la carte vient d'être créée.
+    #    L'avancement se fait uniquement quand find_stage_cards détecte
+    #    que la carte du stage actuel est "done" (ligne ~250).
+    #    Sinon toutes les cartes sont "ready" simultanément → dispatcher
+    #    les prend dans n'importe quel ordre.
 
     conn.commit()
     print(f"\n   Le dispatcher va la picker dans ~60s")
