@@ -765,11 +765,13 @@ def _page(title: str, body: str, project_link: str = "") -> str:
     function runPipeline(btn) {{
         var slug = btn.getAttribute('data-slug');
         var prefix = btn.getAttribute('data-prefix');
+        console.log('🚀 Pipeline clicked:', slug, prefix);
         btn.disabled = true;
         btn.className = 'pipeline-btn running';
         btn.textContent = '⏳ Pipeline...';
         showToast('🔁 Pipeline ' + prefix + ' en cours...', 'info');
 
+        console.log('📡 Fetching POST /api/' + slug + '/pipeline/' + prefix);
         fetch('/api/' + slug + '/pipeline/' + prefix, {{ method: 'POST' }})
             .then(function(r) {{ return r.json(); }})
             .then(function(data) {{
@@ -777,9 +779,9 @@ def _page(title: str, body: str, project_link: str = "") -> str:
                 btn.className = 'pipeline-btn';
                 btn.textContent = '▶ Pipeline';
                 if (data.success) {{
-                    showToast('✅ Pipeline ' + prefix + ' terminé !\n\n' + data.output, 'success');
+                    showToast('✅ Pipeline ' + prefix + ' terminé !<br><br>' + data.output, 'success');
                 }} else {{
-                    showToast('❌ Pipeline ' + prefix + ' échoué\n\n' + (data.error || data.output), 'error');
+                    showToast('❌ Pipeline ' + prefix + ' échoué<br><br>' + (data.error || data.output), 'error');
                 }}
             }})
             .catch(function(err) {{
@@ -895,34 +897,32 @@ async def api_features(slug: str):
 
 @app.post("/api/{slug}/pipeline/{prefix}")
 async def api_pipeline(slug: str, prefix: str):
-    """Run legion pipeline for a feature."""
+    """Run legion pipeline for a feature using centralized pipeline engine."""
     import subprocess
-    proj = get_project(slug)
-    if not proj:
-        return {"error": f"Project '{slug}' not found"}
-    work_dir = proj.get("work_dir")
-    if not work_dir:
-        return {"error": "No work_dir configured"}
+    import sys
+    print(f"[PIPELINE] Request: slug={slug}, prefix={prefix}")
     
-    pipeline_script = os.path.join(work_dir, "scripts", "legion-pipeline.py")
-    if not os.path.isfile(pipeline_script):
-        return {"error": f"Pipeline script not found: {pipeline_script}"}
+    pipeline_script = os.path.expanduser("~/.legion/core/pipeline.py")
+    print(f"[PIPELINE] Running centralized: python3 {pipeline_script} {slug} {prefix.upper()}")
     
     try:
         result = subprocess.run(
-            ["python3", pipeline_script, prefix.upper()],
+            [sys.executable, pipeline_script, slug, prefix.upper()],
             capture_output=True, text=True, timeout=120,
-            cwd=work_dir
         )
         output = result.stdout + result.stderr
+        print(f"[PIPELINE] Done: returncode={result.returncode}")
+        print(f"[PIPELINE] Output: {output[:300]}...")
         return {
             "success": result.returncode == 0,
             "output": output.strip(),
             "returncode": result.returncode
         }
     except subprocess.TimeoutExpired:
+        print(f"[PIPELINE] ERROR: Timeout (120s)")
         return {"error": "Pipeline timeout (120s)", "success": False}
     except Exception as e:
+        print(f"[PIPELINE] ERROR: {e}")
         return {"error": str(e), "success": False}
 
 

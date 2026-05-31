@@ -187,6 +187,11 @@ def main():
     # init
     p_init = sub.add_parser("init", help="Initialiser la DB Légion")
 
+    # pipeline
+    p_pipeline = sub.add_parser("pipeline", help="Lancer la pipeline pour une feature")
+    p_pipeline.add_argument("prefix", help="Préfixe de la feature (ex: AUTH)")
+    p_pipeline.add_argument("--reset", action="store_true", help="Réinitialiser la pipeline")
+
     # ── Plugin commands: expo ──
     p_expo = sub.add_parser("expo", help="Commandes Expo (plugin)")
     p_expo.add_argument("subcommand", nargs="?", default="status",
@@ -214,6 +219,11 @@ def main():
 
     elif args.command == "status":
         cmd_status(args)
+
+    elif args.command == "pipeline":
+        project_slug = args.project or os.environ.get("LEGION_PROJECT") or _detect_default_project()
+        from core.pipeline import run_pipeline
+        sys.exit(run_pipeline(project_slug, args.prefix, reset=args.reset))
 
     elif args.command == "expo":
         # Dispatch to Expo plugin

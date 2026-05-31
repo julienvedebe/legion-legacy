@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS projects (
     board           TEXT NOT NULL,
     extra_skills    TEXT DEFAULT '[]',         -- JSON array
     docs_structure  TEXT DEFAULT 'product/',
+    pipeline_config TEXT DEFAULT '{}',         -- JSON: stage_order, profiles, body_templates, doc_patterns
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
 );
@@ -110,6 +111,18 @@ def init_db():
                 "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                 (1, int(datetime.now().timestamp())),
             )
+            current_version = 1
+
+        if current_version < 2:
+            # Add pipeline_config column to existing tables
+            try:
+                conn.execute("ALTER TABLE projects ADD COLUMN pipeline_config TEXT DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass  # already exists
+            conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                (2, int(datetime.now().timestamp())),
+            )
             conn.commit()
             return True
         return False
@@ -158,6 +171,7 @@ def get_project(slug: str) -> Optional[dict]:
             return None
         proj = dict(row)
         proj["extra_skills"] = json.loads(proj.get("extra_skills", "[]"))
+        proj["pipeline_config"] = json.loads(proj.get("pipeline_config", "{}"))
 
         # Fetch profiles
         cur2 = conn.execute(
@@ -195,6 +209,20 @@ def delete_project(slug: str) -> bool:
         cur = conn.execute("DELETE FROM projects WHERE slug=?", (slug,))
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def set_project_pipeline_config(slug: str, config: dict) -> dict:
+    """Set pipeline configuration for a project. Returns updated project."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE projects SET pipeline_config=?, updated_at=? WHERE slug=?",
+            (json.dumps(config), int(datetime.now().timestamp()), slug),
+        )
+        conn.commit()
+        return get_project(slug)
     finally:
         conn.close()
 

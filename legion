@@ -29,6 +29,8 @@ Commandes:
   projects show <slug>   Détail d'un projet
   features               Lister les features du projet
   status <PREFIX>        Statut d'une feature
+  pipeline <PREFIX>      Lancer la pipeline d'une feature
+  pipeline <PREFIX> --reset  Réinitialiser la pipeline
   tui                    Lancer l'interface TUI (dashboard)
   serve|web              Lancer le serveur web (textual-serve)
   -p <slug>              Cibler un projet spécifique
