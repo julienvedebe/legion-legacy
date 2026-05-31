@@ -1,0 +1,112 @@
+#!/bin/bash
+# ═══════════════════════════════════════════════════════════════
+# Legion — CLI entry point
+# ═══════════════════════════════════════════════════════════════
+# Ce script est l'interface utilisateur de Legion.
+# Il appelle le core Python et gère le multi-projet.
+#
+# Usage: legion <commande> [args]
+#        legion -p <slug> <commande> [args]
+# ═══════════════════════════════════════════════════════════════
+
+set -e
+
+LEGION_HOME="${HOME}/.legion"
+LEGION_CLI="${LEGION_HOME}/core/cli.py"
+
+# ── Help ──
+show_help() {
+    cat << 'HELP'
+🏛️  Legion — Système de société virtuelle
+
+Usage:
+  legion <commande> [options]
+  legion -p <slug> <commande>
+
+Commandes:
+  init                   Initialiser la base de données
+  projects               Lister les projets
+  projects show <slug>   Détail d'un projet
+  features               Lister les features du projet
+  status <PREFIX>        Statut d'une feature
+  tui                    Lancer l'interface TUI (dashboard)
+  serve|web              Lancer le serveur web (textual-serve)
+  -p <slug>              Cibler un projet spécifique
+  stitch export <slug>    Exporter les screens Stitch en HTML local
+  stitch export -l        Lister les screens Stitch
+
+Exemples:
+  legion features                          → Features wonderfamily
+  legion -p skull-game features            → Features skull-game
+  legion -p skull-game status AUTH         → Statut AUTH
+  legion projects                          → Tous les projets
+
+Plus d'infos: cat ~/.legion/README.md
+HELP
+}
+
+# ── Parse -p / --project ──
+PROJECT=""
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -p|--project)
+            PROJECT="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# ── Logging ──
+log_file="${LEGION_HOME}/db/legion.log"
+mkdir -p "$(dirname "$log_file")"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] legion ${ARGS[*]}" >> "$log_file"
+
+# ── Exécution ──
+export LEGION_PROJECT="${PROJECT:-$LEGION_PROJECT}"
+
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    show_help
+    exit 0
+fi
+
+case "${ARGS[0]}" in
+    init)
+        python3 "$LEGION_CLI" init
+        ;;
+    projects)
+        # Remove 'projects' from args for the Python script
+        python3 "$LEGION_CLI" projects "${ARGS[@]:1}"
+        ;;
+    features)
+        python3 "$LEGION_CLI" --project "$PROJECT" features
+        ;;
+    status)
+        if [[ -z "${ARGS[1]}" ]]; then
+            echo "❌ Usage: legion status <PREFIX>"
+            exit 1
+        fi
+        python3 "$LEGION_CLI" --project "$PROJECT" status "${ARGS[1]}"
+        ;;
+    tui)
+        python3 "${LEGION_HOME}/tui/app.py" --project "$PROJECT"
+        ;;
+    serve|web)
+        python3 "${LEGION_HOME}/tui/web.py" --port 8000 --host 0.0.0.0
+        ;;
+    stitch)
+        python3 "${LEGION_HOME}/scripts/legion-stitch-export.py" "${ARGS[@]:1}"
+        ;;
+    *)
+        python3 "$LEGION_CLI" "${ARGS[@]}"
+        ;;
+esac
