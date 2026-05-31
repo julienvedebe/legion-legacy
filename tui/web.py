@@ -30,6 +30,8 @@ from fastapi.responses import HTMLResponse
 import uvicorn
 
 from core.db import list_projects, get_project, list_features
+from core.db import list_bundles, get_bundle, add_bundle, delete_bundle
+from core.db import list_profile_templates, get_profile_template, add_profile_template, delete_profile_template, update_profile_active
 
 
 def _nav_tabs(slug: str, active: str) -> str:
@@ -39,8 +41,11 @@ def _nav_tabs(slug: str, active: str) -> str:
         "kanban": f"/kanban/{slug}",
         "docs": f"/{slug}/docs",
         "expo": f"/expo/{slug}",
+        "bundles": f"/bundles/{slug}",
+        "profiles": f"/profiles/{slug}",
     }
-    labels = {"features": "📋 Features", "kanban": "📌 Kanban", "docs": "📄 Docs", "expo": "⚡ Expo"}
+    labels = {"features": "📋 Features", "kanban": "📌 Kanban", "docs": "📄 Docs",
+              "expo": "⚡ Expo", "bundles": "📦 Bundles", "profiles": "👤 Profils"}
     html = '<div class="nav-tabs">'
     for key, url in tabs.items():
         cls = ' class="nav-tab active"' if key == active else ' class="nav-tab"'
@@ -1613,6 +1618,306 @@ async def expo_refresh(slug: str):
     """Redirect back to expo page (refreshes status)."""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=f"/expo/{slug}", status_code=303)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Bundles pages
+# ═══════════════════════════════════════════════════════════════
+
+@app.get("/bundles/{slug}", response_class=HTMLResponse)
+async def bundles_page(slug: str):
+    """Bundle management page."""
+    proj = get_project(slug)
+    if not proj:
+        return _page("Projet introuvable", "<p>Projet introuvable.</p>")
+
+    bundles = list_bundles(slug)
+    nav = _nav_tabs(slug, "bundles")
+    back = f'<a href="/{slug}" class="back-link">← Retour au projet</a>'
+
+    rows = ""
+    for b in bundles:
+        skills_str = ", ".join(b["skills"]) if b["skills"] else "—"
+        rows += f"""
+        <div class="card">
+            <div class="card-row">
+                <span class="prefix-lg">📦</span>
+                <div style="flex:1">
+                    <div class="name">{html.escape(b['name'])}</div>
+                    <div class="meta">{html.escape(b.get('description', ''))}</div>
+                    <div class="meta">Skills: {html.escape(skills_str)}</div>
+                </div>
+                <button onclick="deleteBundle('{b['name']}')" class="pipeline-btn" style="border-color:#ef4444;color:#fca5a5;background:#450a0a">🗑️</button>
+            </div>
+        </div>"""
+
+    body = f"""
+    {back}
+    <h2>📦 Bundles — {html.escape(proj['name'])}</h2>
+    {nav}
+
+    <div class="card" style="border-color:#3b82f6">
+        <div class="name" style="margin-bottom:8px">➕ Nouveau bundle</div>
+        <form id="bundleForm" onsubmit="return createBundle(event)" style="display:flex;flex-direction:column;gap:8px">
+            <input name="name" placeholder="Nom du bundle" required style="padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0">
+            <input name="description" placeholder="Description" style="padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0">
+            <input name="skills" placeholder="Skills (séparés par des virgules)" style="padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0">
+            <textarea name="instruction" placeholder="Instruction additionnelle" rows="2" style="padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0"></textarea>
+            <button type="submit" class="pipeline-btn" style="align-self:flex-start">✅ Créer</button>
+        </form>
+    </div>
+
+    <h3 style="margin-bottom:8px;color:#94a3b8">{len(bundles)} bundle(s)</h3>
+    {rows or '<p style="color:#475569">Aucun bundle.</p>'}
+
+    <script>
+    function createBundle(e) {{
+        e.preventDefault();
+        var form = document.getElementById('bundleForm');
+        var data = {{}};
+        for (var i = 0; i < form.elements.length; i++) {{
+            var el = form.elements[i];
+            if (el.name) data[el.name] = el.value;
+        }}
+        fetch('/api/bundles/{slug}/create', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify(data)
+        }}).then(r => r.json()).then(d => {{
+            if (d.success) {{ showToast('✅ Bundle créé', 'success'); setTimeout(function() {{ location.reload(); }}, 500); }}
+            else {{ showToast('❌ ' + d.error, 'error'); }}
+        }});
+        return false;
+    }}
+    function deleteBundle(name) {{
+        if (!confirm('Supprimer le bundle «' + name + '» ?')) return;
+        fetch('/api/bundles/{slug}/delete', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{name: name}})
+        }}).then(r => r.json()).then(d => {{
+            if (d.success) {{ showToast('🗑️ Bundle supprimé', 'success'); setTimeout(function() {{ location.reload(); }}, 500); }}
+            else {{ showToast('❌ ' + d.error, 'error'); }}
+        }});
+    }}
+    </script>
+    """
+    return _page(f"Bundles {slug}", body)
+
+
+@app.post("/api/bundles/{slug}/create")
+async def api_bundle_create(slug: str, request: Request):
+    """API: Create a bundle."""
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        return {"success": False, "error": "Nom requis"}
+    skills_str = data.get("skills", "").strip()
+    skills = [s.strip() for s in skills_str.split(",") if s.strip()] if skills_str else []
+    bundle = add_bundle(
+        name=name, skills=skills,
+        description=data.get("description", "").strip(),
+        project_slug=slug, instruction=data.get("instruction", "").strip(),
+    )
+    if bundle:
+        import subprocess
+        cmd = ["hermes", "bundles", "create", name]
+        for s in skills:
+            cmd += ["--skill", s]
+        if data.get("description"):
+            cmd += ["--description", data["description"]]
+        subprocess.run(cmd, capture_output=True, timeout=15)
+        return {"success": True, "bundle": bundle}
+    return {"success": False, "error": "Erreur création"}
+
+
+@app.post("/api/bundles/{slug}/delete")
+async def api_bundle_delete(slug: str, request: Request):
+    """API: Delete a bundle."""
+    data = await request.json()
+    name = data.get("name", "")
+    if delete_bundle(name):
+        import subprocess
+        subprocess.run(["hermes", "bundles", "delete", name], capture_output=True, timeout=15)
+        return {"success": True}
+    return {"success": False, "error": "Bundle introuvable"}
+
+
+# ═══════════════════════════════════════════════════════════════
+# Profiles pages
+# ═══════════════════════════════════════════════════════════════
+
+@app.get("/profiles/{slug}", response_class=HTMLResponse)
+async def profiles_page(slug: str):
+    """Profile management page."""
+    proj = get_project(slug)
+    if not proj:
+        return _page("Projet introuvable", "<p>Projet introuvable.</p>")
+
+    profiles = list_profile_templates(slug)
+    bundles = list_bundles(slug)
+    nav = _nav_tabs(slug, "profiles")
+    back = f'<a href="/{slug}" class="back-link">← Retour au projet</a>'
+
+    bundle_opts = '<option value="">(Aucun)</option>'
+    for b in bundles:
+        bundle_opts += f'<option value="{html.escape(b["name"])}">{html.escape(b["name"])}</option>'
+
+    rows = ""
+    for p in profiles:
+        system_tag = "<span style='color:#64748b;font-size:11px'> ⚙️</span>" if p.get("is_system") else ""
+        active_tag = "<span style='color:#22c55e'>✅</span>" if p.get("is_active") else "<span style='color:#64748b'>⬜</span>"
+        role_colors = {"product":"#3b82f6","design":"#e879f9","architect":"#fdba74",
+                       "backend":"#6ee7b7","frontend":"#93c5fd","master-agent":"#fbbf24"}
+        role_color = role_colors.get(p.get("role",""), "#94a3b8")
+        bundle_info = f" bundle: {p['bundle_name']}" if p.get("bundle_name") else ""
+        delete_btn = "" if p.get("is_system") else f'<button onclick="deleteProfile(\'{p["name"]}\')" class="pipeline-btn" style="border-color:#ef4444;color:#fca5a5;background:#450a0a">🗑️</button>'
+        activate_btn = ""
+        if not p.get("is_system"):
+            if p.get("is_active"):
+                activate_btn = f'<button onclick="deactivateProfile(\'{p["name"]}\')" class="pipeline-btn" style="border-color:#f59e0b;color:#fde68a;background:#451a03">🔴 Désactiver</button>'
+            else:
+                activate_btn = f'<button onclick="activateProfile(\'{p["name"]}\')" class="pipeline-btn" style="border-color:#22c55e;color:#bbf7d0;background:#052e16">✅ Activer</button>'
+
+        rows += f"""
+        <div class="card">
+            <div class="card-row">
+                <span class="prefix-lg" style="color:{role_color}">👤</span>
+                <div style="flex:1">
+                    <div class="name">{html.escape(p['name'])}{system_tag}{active_tag}</div>
+                    <div class="meta">Rôle: {p.get('role','—')}{bundle_info}</div>
+                    <div class="meta" style="font-size:11px">{html.escape(p.get('instruction','')[:80])}</div>
+                </div>
+                <div style="display:flex;gap:4px">{activate_btn}{delete_btn}</div>
+            </div>
+        </div>"""
+
+    body = f"""
+    {back}
+    <h2>👤 Profils — {html.escape(proj['name'])}</h2>
+    {nav}
+    <div class="card" style="border-color:#3b82f6">
+        <div class="name" style="margin-bottom:8px">➕ Nouveau profil</div>
+        <form id="profileForm" onsubmit="return createProfile(event)" style="display:flex;flex-direction:column;gap:8px">
+            <input name="name" placeholder="Nom du profil" required style="padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0">
+            <div style="display:flex;gap:8px">
+                <input name="role" placeholder="Rôle (product, design...)" style="flex:1;padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0">
+                <select name="bundle" style="flex:1;padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0">{bundle_opts}</select>
+            </div>
+            <input name="channel" placeholder="ID canal Discord (optionnel)" style="padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0">
+            <textarea name="instruction" placeholder="Instruction / SOUL.md" rows="3" style="padding:8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0"></textarea>
+            <button type="submit" class="pipeline-btn" style="align-self:flex-start">✅ Créer</button>
+        </form>
+    </div>
+    <h3 style="margin-bottom:8px;color:#94a3b8">{len(profiles)} profil(s)</h3>
+    {rows or '<p style="color:#475569">Aucun profil.</p>'}
+    <script>
+    function createProfile(e) {{
+        e.preventDefault(); var form = document.getElementById('profileForm'); var data = {{}};
+        for (var i = 0; i < form.elements.length; i++) {{ var el = form.elements[i]; if (el.name) data[el.name] = el.value; }}
+        fetch('/api/profiles/{slug}/create', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(data) }})
+        .then(r=>r.json()).then(d=>{{ if(d.success){{ showToast('✅ Profil créé','success'); setTimeout(function(){{ location.reload(); }},500); }} else {{ showToast('❌ '+d.error,'error'); }} }});
+        return false;
+    }}
+    function deleteProfile(name) {{
+        if (!confirm('Supprimer le profil «'+name+'» ?')) return;
+        fetch('/api/profiles/{slug}/delete', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{name:name}}) }})
+        .then(r=>r.json()).then(d=>{{ if(d.success){{ showToast('🗑️ Profil supprimé','success'); setTimeout(function(){{ location.reload(); }},500); }} else {{ showToast('❌ '+d.error,'error'); }} }});
+    }}
+    function activateProfile(name) {{
+        fetch('/api/profiles/{slug}/activate', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{name:name}}) }})
+        .then(r=>r.json()).then(d=>{{ if(d.success){{ showToast(d.message||'✅ Profil activé','success'); setTimeout(function(){{ location.reload(); }},500); }} else {{ showToast('❌ '+d.error,'error'); }} }});
+    }}
+    function deactivateProfile(name) {{
+        fetch('/api/profiles/{slug}/deactivate', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{name:name}}) }})
+        .then(r=>r.json()).then(d=>{{ if(d.success){{ showToast('⬜ Profil désactivé','success'); setTimeout(function(){{ location.reload(); }},500); }} else {{ showToast('❌ '+d.error,'error'); }} }});
+    }}
+    </script>
+    """
+    return _page(f"Profils {slug}", body)
+
+
+@app.post("/api/profiles/{slug}/create")
+async def api_profile_create(slug: str, request: Request):
+    """API: Create a profile template."""
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        return {"success": False, "error": "Nom requis"}
+    profile = add_profile_template(
+        name=name, project_slug=slug,
+        bundle_name=data.get("bundle") or None,
+        role=data.get("role", "").strip(),
+        channel_id=data.get("channel", "").strip(),
+        instruction=data.get("instruction", "").strip(),
+        model=data.get("model", "").strip(),
+        provider=data.get("provider", "").strip(),
+    )
+    if profile:
+        return {"success": True, "profile": profile}
+    return {"success": False, "error": "Erreur création"}
+
+
+@app.post("/api/profiles/{slug}/delete")
+async def api_profile_delete(slug: str, request: Request):
+    """API: Delete a profile template."""
+    data = await request.json()
+    name = data.get("name", "")
+    p = get_profile_template(name, slug)
+    if p and p.get("is_system"):
+        return {"success": False, "error": "Impossible de supprimer un profil système"}
+    if delete_profile_template(name, slug):
+        return {"success": True}
+    return {"success": False, "error": "Profil introuvable"}
+
+
+@app.post("/api/profiles/{slug}/activate")
+async def api_profile_activate(slug: str, request: Request):
+    """API: Activate a profile."""
+    data = await request.json()
+    name = data.get("name", "")
+    p = get_profile_template(name, slug)
+    if not p:
+        return {"success": False, "error": "Profil introuvable"}
+
+    profile_name = f"{slug}-{name}"
+    soul_dir = os.path.expanduser(f"~/.hermes/profiles/{profile_name}")
+    import subprocess
+    subprocess.run(["hermes", "profile", "create", profile_name, "--clone-from", "default"],
+                   capture_output=True, timeout=15)
+    os.makedirs(soul_dir, exist_ok=True)
+    instruction = p.get("instruction", "") or f"Tu es le profil {name} du projet {slug}."
+    with open(os.path.join(soul_dir, "SOUL.md"), "w") as f:
+        f.write(f"# {name} — {slug}\n\n{instruction}\n")
+
+    proj = get_project(slug)
+    if proj:
+        config_path = os.path.join(soul_dir, "config.yaml")
+        work_dir = proj["work_dir"]
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                cfg = f.read()
+            if "workdir:" not in cfg:
+                with open(config_path, "a") as f:
+                    f.write(f"\nworkdir: {work_dir}\n")
+
+    update_profile_active(name, slug, True)
+    msg = f"✅ Profil '{name}' activé → ~/.hermes/profiles/{profile_name}/"
+    if p.get("channel_id"):
+        msg += f"\n   Canal: {p['channel_id']}\n   ⚠️ Redémarre la gateway: hermes gateway restart"
+    return {"success": True, "message": msg}
+
+
+@app.post("/api/profiles/{slug}/deactivate")
+async def api_profile_deactivate(slug: str, request: Request):
+    """API: Deactivate a profile."""
+    data = await request.json()
+    name = data.get("name", "")
+    p = get_profile_template(name, slug)
+    if p and p.get("is_system"):
+        return {"success": False, "error": "Impossible de désactiver un profil système"}
+    update_profile_active(name, slug, False)
+    return {"success": True, "message": "⬜ Profil désactivé"}
 
 
 # ── Main ──

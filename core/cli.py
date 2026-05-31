@@ -6,11 +6,17 @@ Usage: python3 ~/.legion/core/cli.py <command> [args]
 import sys
 import os
 import argparse
+import json
 
 # Add ~/.legion to path
 sys.path.insert(0, os.path.expanduser("~/.legion"))
 
-from core.db import init_db, list_projects, get_project, list_features, get_feature_by_prefix
+from core.db import (
+    init_db, list_projects, get_project, list_features, get_feature_by_prefix,
+    add_bundle, get_bundle, list_bundles, delete_bundle,
+    add_profile_template, get_profile_template, list_profile_templates,
+    update_profile_active, delete_profile_template, seed_system_profiles,
+)
 
 
 def _detect_default_project() -> str:
@@ -165,6 +171,251 @@ def cmd_status(args):
             print(f"   {icon} {stage_name:12s} {doc_path}")
 
 
+# ═══════════════════════════════════════════════════════════════
+# Bundle commands
+# ═══════════════════════════════════════════════════════════════
+
+def cmd_bundle(args):
+    """Manage skill bundles."""
+    action = args.bundle_action
+    project_slug = args.project or os.environ.get("LEGION_PROJECT") or "skull-game"
+
+    if action == "list":
+        bundles = list_bundles(project_slug)
+        if not bundles:
+            print("📭 Aucun bundle.")
+            return
+        print(f"📦 Bundles ({len(bundles)})")
+        print()
+        for b in bundles:
+            skills_str = ", ".join(b["skills"]) if b["skills"] else "(aucun)"
+            active_count = " ⭐" if b["project_slug"] and b["project_slug"] == project_slug else ""
+            print(f"  {b['name']:25s} │ {b.get('description', ''):40s} │ {skills_str}{active_count}")
+
+    elif action == "create":
+        name = args.bundle_name
+        if not name:
+            print("❌ Indique un nom : legion bundle create <name> --skill s1 --skill s2")
+            return
+        skills = args.skill or []
+        desc = args.desc or ""
+        instruction = args.instruction or ""
+        bundle = add_bundle(name=name, skills=skills, description=desc,
+                           project_slug=project_slug, instruction=instruction)
+        if bundle:
+            print(f"✅ Bundle '{name}' créé ({len(skills)} skills)")
+            # Also create Hermes bundle
+            cmd = f"hermes bundles create \"{name}\""
+            for s in skills:
+                cmd += f" --skill {s}"
+            if desc:
+                cmd += f" --description \"{desc}\""
+            if instruction:
+                cmd += f" --instruction \"{instruction}\""
+            cmd += " 2>/dev/null"
+            os.system(cmd)
+        else:
+            print(f"❌ Erreur création bundle '{name}'")
+
+    elif action == "show":
+        name = args.bundle_name
+        if not name:
+            print("❌ Indique un nom : legion bundle show <name>")
+            return
+        b = get_bundle(name)
+        if not b:
+            print(f"❌ Bundle '{name}' introuvable.")
+            return
+        print(f"📦 {b['name']}")
+        print(f"   Description: {b.get('description', '')}")
+        print(f"   Projet:      {b.get('project_slug', '(global)')}")
+        print(f"   Skills:      {', '.join(b['skills'])}")
+        print(f"   Instruction: {b.get('instruction', '')}")
+
+    elif action == "delete":
+        name = args.bundle_name
+        if not name:
+            print("❌ Indique un nom : legion bundle delete <name>")
+            return
+        if delete_bundle(name):
+            print(f"🗑️  Bundle '{name}' supprimé.")
+            os.system(f"hermes bundles delete \"{name}\" 2>/dev/null")
+        else:
+            print(f"❌ Bundle '{name}' introuvable.")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Profile commands
+# ═══════════════════════════════════════════════════════════════
+
+def cmd_profile(args):
+    """Manage profile templates."""
+    action = args.profile_action
+    project_slug = args.project or os.environ.get("LEGION_PROJECT") or "skull-game"
+
+    if action == "list":
+        profiles = list_profile_templates(project_slug)
+        if not profiles:
+            print("📭 Aucun profil.")
+            return
+        print(f"👤 Profils — {project_slug} ({len(profiles)})")
+        print()
+        for p in profiles:
+            system_tag = " ⚙️ système" if p.get("is_system") else ""
+            active_tag = " ✅ actif" if p.get("is_active") else ""
+            bundle_info = f"  bundle: {p['bundle_name']}" if p.get("bundle_name") else ""
+            print(f"  {p['name']:20s} │ {p.get('role', ''):15s} │ {bundle_info}{system_tag}{active_tag}")
+
+    elif action == "create":
+        name = args.profile_name
+        if not name:
+            print("❌ Indique un nom : legion profile create <name> --role <role>")
+            return
+        profile = add_profile_template(
+            name=name,
+            project_slug=project_slug,
+            bundle_name=args.bundle or None,
+            role=args.role or "",
+            channel_id=args.channel or "",
+            instruction=args.instruction or "",
+            model=args.model or "",
+            provider=args.provider or "",
+        )
+        if profile:
+            print(f"✅ Profil '{name}' créé (projet: {project_slug})")
+        else:
+            print(f"❌ Erreur création profil '{name}'")
+
+    elif action == "show":
+        name = args.profile_name
+        if not name:
+            print("❌ Indique un nom : legion profile show <name>")
+            return
+        p = get_profile_template(name, project_slug)
+        if not p:
+            print(f"❌ Profil '{name}' introuvable.")
+            return
+        print(f"👤 {p['name']}")
+        print(f"   Projet:      {p['project_slug']}")
+        print(f"   Rôle:        {p.get('role', '')}")
+        print(f"   Bundle:      {p.get('bundle_name', '(aucun)')}")
+        print(f"   Canal:       {p.get('channel_id', '(aucun)')}")
+        print(f"   Actif:       {'✅ oui' if p.get('is_active') else '⬜ non'}")
+        print(f"   Système:     {'⚙️ oui' if p.get('is_system') else 'non'}")
+        print(f"   Modèle:      {p.get('model', '(défaut)')}")
+        print(f"   Provider:    {p.get('provider', '(défaut)')}")
+        inst = p.get('instruction', '')
+        if inst:
+            print(f"   Instruction: {inst[:100]}{'...' if len(inst) > 100 else ''}")
+
+    elif action == "delete":
+        name = args.profile_name
+        if not name:
+            print("❌ Indique un nom : legion profile delete <name>")
+            return
+        p = get_profile_template(name, project_slug)
+        if p and p.get("is_system"):
+            print(f"❌ Impossible de supprimer un profil système '{name}'.")
+            return
+        if delete_profile_template(name, project_slug):
+            print(f"🗑️  Profil '{name}' supprimé.")
+        else:
+            print(f"❌ Profil '{name}' introuvable.")
+
+    elif action == "seed":
+        """Seed default system profiles."""
+        seed_system_profiles(project_slug)
+        print(f"✅ Profils systèmes créés pour '{project_slug}'.")
+
+    elif action == "activate":
+        name = args.profile_name
+        if not name:
+            print("❌ Indique un nom : legion profile activate <name>")
+            return
+        p = get_profile_template(name, project_slug)
+        if not p:
+            print(f"❌ Profil '{name}' introuvable.")
+            return
+        if p.get("is_active"):
+            print(f"ℹ️  Profil '{name}' déjà actif.")
+            return
+
+        # Create Hermes profile directory
+        profile_name = f"{project_slug}-{name}"
+        import subprocess
+        subprocess.run(["hermes", "profile", "create", profile_name,
+                        "--clone-from", "default"], capture_output=True, timeout=15)
+
+        # Write SOUL.md
+        soul_dir = os.path.expanduser(f"~/.hermes/profiles/{profile_name}")
+        os.makedirs(soul_dir, exist_ok=True)
+        instruction = p.get("instruction", "") or f"Tu es le profil {name} du projet {project_slug}."
+        soul_content = f"# {name} — {project_slug}\n\n{instruction}\n"
+        with open(os.path.join(soul_dir, "SOUL.md"), "w") as f:
+            f.write(soul_content)
+
+        # Update workdir in config.yaml
+        proj = get_project(project_slug)
+        if proj:
+            config_path = os.path.join(soul_dir, "config.yaml")
+            work_dir = proj["work_dir"]
+            config_lines = []
+            if os.path.exists(config_path):
+                with open(config_path) as f:
+                    for line in f:
+                        config_lines.append(line)
+            # Ensure workdir is set
+            has_workdir = any("workdir:" in l for l in config_lines)
+            if not has_workdir:
+                config_lines.append(f"\nworkdir: {work_dir}\n")
+                with open(config_path, "w") as f:
+                    f.writelines(config_lines)
+
+        # If channel_id provided, add to main config.yaml
+        channel_id = p.get("channel_id", "")
+        if channel_id:
+            config_path = os.path.expanduser("~/.hermes/config.yaml")
+            if os.path.exists(config_path):
+                with open(config_path) as f:
+                    config_text = f.read()
+                # Check if channel already has a prompt
+                if f"'{channel_id}'" not in config_text:
+                    prompt_text = f"Channel {project_slug} - {name}\\nTu es le profil {name} du projet {project_slug}.\\n{instruction.replace(chr(10), ' ')}"
+                    # Add to discord.channel_prompts
+                    import re
+                    # Find the channel_prompts section
+                    if "channel_prompts:" in config_text:
+                        # Add before the next top-level key after channel_prompts
+                        config_text = config_text.replace(
+                            "channel_prompts:",
+                            f"channel_prompts:\n    '{channel_id}': '{prompt_text}'",
+                            1
+                        ) if "channel_prompts: {}" in config_text else config_text
+                        if "channel_prompts: {}" not in config_text:
+                            # Add as a new entry before closing }
+                            pass  # Manual edit needed for complex YAML
+                    with open(config_path, "w") as f:
+                        f.write(config_text)
+
+        update_profile_active(name, project_slug, True)
+        print(f"✅ Profil '{name}' activé → ~/.hermes/profiles/{profile_name}/")
+        if channel_id:
+            print(f"   Canal Discord: {channel_id}")
+            print(f"   ⚠️  Redémarre la gateway : hermes gateway restart")
+
+    elif action == "deactivate":
+        name = args.profile_name
+        if not name:
+            print("❌ Indique un nom : legion profile deactivate <name>")
+            return
+        if p and p.get("is_system"):
+            print(f"❌ Impossible de désactiver un profil système.")
+            return
+        update_profile_active(name, project_slug, False)
+        print(f"⬜ Profil '{name}' désactivé.")
+        print(f"   🔄 Redémarre la gateway : hermes gateway restart")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Legion — Système de société virtuelle")
     parser.add_argument("--project", "-p", help="Slug du projet (ou LEGION_PROJECT)")
@@ -198,6 +449,27 @@ def main():
                         choices=["start", "stop", "status", "build", "update", "help"],
                         help="Sous-commande Expo")
     p_expo.add_argument("extra", nargs="*", help="Arguments supplémentaires")
+
+    # ── Bundle commands ──
+    p_bundle = sub.add_parser("bundle", help="Gérer les bundles de skills")
+    p_bundle.add_argument("bundle_action", choices=["list", "create", "show", "delete"],
+                          help="Action sur le bundle")
+    p_bundle.add_argument("bundle_name", nargs="?", help="Nom du bundle")
+    p_bundle.add_argument("--skill", "-s", action="append", help="Skill à inclure (répétable)")
+    p_bundle.add_argument("--desc", "-d", help="Description du bundle")
+    p_bundle.add_argument("--instruction", "-i", help="Instruction additionnelle")
+
+    # ── Profile commands ──
+    p_profile = sub.add_parser("profile", help="Gérer les profils d'agents")
+    p_profile.add_argument("profile_action", choices=["list", "create", "show", "delete", "seed", "activate", "deactivate"],
+                           help="Action sur le profil")
+    p_profile.add_argument("profile_name", nargs="?", help="Nom du profil")
+    p_profile.add_argument("--bundle", "-b", help="Nom du bundle à associer")
+    p_profile.add_argument("--role", "-r", help="Rôle du profil (product, design...)")
+    p_profile.add_argument("--channel", "-c", help="ID du canal Discord")
+    p_profile.add_argument("--instruction", "-i", help="Instruction / SOUL.md content")
+    p_profile.add_argument("--model", "-m", help="Modèle override")
+    p_profile.add_argument("--provider", help="Provider override")
 
     args = parser.parse_args()
 
@@ -246,6 +518,12 @@ def main():
             _show_plugin_help("expo", project_slug)
         elif not run_plugin_command("expo", args.subcommand, ctx):
             print(f"❌ Commande 'expo {args.subcommand}' inconnue.")
+
+    elif args.command == "bundle":
+        cmd_bundle(args)
+
+    elif args.command == "profile":
+        cmd_profile(args)
 
     else:
         parser.print_help()

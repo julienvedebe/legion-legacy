@@ -78,11 +78,41 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at INTEGER NOT NULL
 );
 
+-- 7. Skill bundles (wraps hermes bundles)
+CREATE TABLE IF NOT EXISTS bundles (
+    name            TEXT PRIMARY KEY,
+    description     TEXT DEFAULT '',
+    project_slug    TEXT REFERENCES projects(slug) ON DELETE SET NULL,
+    instruction     TEXT DEFAULT '',
+    skills          TEXT NOT NULL DEFAULT '[]',  -- JSON array of skill names
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+
+-- 8. Profile templates (builder for Hermes profiles)
+CREATE TABLE IF NOT EXISTS profile_templates (
+    name            TEXT NOT NULL,
+    project_slug    TEXT NOT NULL REFERENCES projects(slug) ON DELETE CASCADE,
+    bundle_name     TEXT REFERENCES bundles(name) ON DELETE SET NULL,
+    role            TEXT DEFAULT '',              -- 'product', 'design', 'architect', etc.
+    channel_id      TEXT DEFAULT '',              -- Discord channel ID
+    instruction     TEXT DEFAULT '',              -- Extra system prompt / SOUL.md content
+    model           TEXT DEFAULT '',              -- Model override
+    provider        TEXT DEFAULT '',              -- Provider override
+    is_active       INTEGER DEFAULT 0,            -- 1 if profile dir exists
+    is_system       INTEGER DEFAULT 0,            -- 1 if system default (product, design...)
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (name, project_slug)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_slug);
 CREATE INDEX IF NOT EXISTS idx_features_prefix ON features(prefix);
 CREATE INDEX IF NOT EXISTS idx_project_profiles_project ON project_profiles(project_slug);
 CREATE INDEX IF NOT EXISTS idx_feature_meta_lookup ON feature_meta(feature_slug, project_slug);
+CREATE INDEX IF NOT EXISTS idx_bundles_project ON bundles(project_slug);
+CREATE INDEX IF NOT EXISTS idx_profile_templates_project ON profile_templates(project_slug);
 """
 
 
@@ -125,6 +155,17 @@ def init_db():
             )
             conn.commit()
             return True
+
+        if current_version < 3:
+            # Tables created by SCHEMA_SQL for v3 (bundles, profile_templates)
+            # Just mark the version
+            conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                (3, int(datetime.now().timestamp())),
+            )
+            conn.commit()
+            return True
+
         return False
     finally:
         conn.close()
@@ -439,3 +480,198 @@ def ensure_indexes():
         conn.commit()
     finally:
         conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Bundles CRUD
+# ═══════════════════════════════════════════════════════════════
+
+def add_bundle(
+    name: str,
+    skills: list,
+    description: str = "",
+    project_slug: str = None,
+    instruction: str = "",
+) -> dict:
+    """Add a bundle. Returns the bundle dict."""
+    now = int(datetime.now().timestamp())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT OR REPLACE INTO bundles
+               (name, description, project_slug, instruction, skills, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM bundles WHERE name=?), ?), ?)""",
+            (name, description, project_slug, instruction, json.dumps(skills),
+             name, now, now),
+        )
+        conn.commit()
+        return get_bundle(name)
+    finally:
+        conn.close()
+
+
+def get_bundle(name: str) -> Optional[dict]:
+    """Get a bundle by name. Returns None if not found."""
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT * FROM bundles WHERE name=?", (name,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        b = dict(row)
+        b["skills"] = json.loads(b.get("skills", "[]"))
+        return b
+    finally:
+        conn.close()
+
+
+def list_bundles(project_slug: str = None) -> list[dict]:
+    """List bundles, optionally filtered by project."""
+    conn = get_conn()
+    try:
+        if project_slug:
+            cur = conn.execute(
+                "SELECT * FROM bundles WHERE project_slug=? OR project_slug IS NULL ORDER BY name",
+                (project_slug,),
+            )
+        else:
+            cur = conn.execute("SELECT * FROM bundles ORDER BY name")
+        bundles = [dict(r) for r in cur.fetchall()]
+        for b in bundles:
+            b["skills"] = json.loads(b.get("skills", "[]"))
+        return bundles
+    finally:
+        conn.close()
+
+
+def delete_bundle(name: str) -> bool:
+    """Delete a bundle. Returns True if deleted."""
+    conn = get_conn()
+    try:
+        cur = conn.execute("DELETE FROM bundles WHERE name=?", (name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Profile Templates CRUD
+# ═══════════════════════════════════════════════════════════════
+
+def add_profile_template(
+    name: str,
+    project_slug: str,
+    bundle_name: str = None,
+    role: str = "",
+    channel_id: str = "",
+    instruction: str = "",
+    model: str = "",
+    provider: str = "",
+    is_system: bool = False,
+) -> dict:
+    """Add a profile template. Returns the profile dict."""
+    now = int(datetime.now().timestamp())
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT OR REPLACE INTO profile_templates
+               (name, project_slug, bundle_name, role, channel_id, instruction,
+                model, provider, is_active, is_system, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, COALESCE((SELECT created_at FROM profile_templates WHERE name=? AND project_slug=?), ?), ?)""",
+            (name, project_slug, bundle_name, role, channel_id, instruction,
+             model, provider, 1 if is_system else 0,
+             name, project_slug, now, now),
+        )
+        conn.commit()
+        return get_profile_template(name, project_slug)
+    finally:
+        conn.close()
+
+
+def get_profile_template(name: str, project_slug: str) -> Optional[dict]:
+    """Get a profile template by name + project. Returns None if not found."""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT * FROM profile_templates WHERE name=? AND project_slug=?",
+            (name, project_slug),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def list_profile_templates(project_slug: str = None) -> list[dict]:
+    """List profile templates, optionally filtered by project."""
+    conn = get_conn()
+    try:
+        if project_slug:
+            cur = conn.execute(
+                "SELECT * FROM profile_templates WHERE project_slug=? ORDER BY is_system DESC, name",
+                (project_slug,),
+            )
+        else:
+            cur = conn.execute("SELECT * FROM profile_templates ORDER BY project_slug, name")
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def update_profile_active(name: str, project_slug: str, is_active: bool) -> bool:
+    """Set the active flag on a profile template."""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE profile_templates SET is_active=?, updated_at=? WHERE name=? AND project_slug=?",
+            (1 if is_active else 0, int(datetime.now().timestamp()), name, project_slug),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_profile_template(name: str, project_slug: str) -> bool:
+    """Delete a profile template. Returns True if deleted."""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "DELETE FROM profile_templates WHERE name=? AND project_slug=?",
+            (name, project_slug),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def seed_system_profiles(project_slug: str):
+    """Seed default system profiles for a project if they don't exist."""
+    defaults = [
+        {"name": f"product", "role": "product", "is_system": True,
+         "instruction": "Product Explorer — exploration et specs produit"},
+        {"name": f"design", "role": "design", "is_system": True,
+         "instruction": "UI/UX Designer — maquettes Stitch uniquement"},
+        {"name": f"architect", "role": "architect", "is_system": True,
+         "instruction": "Architecte — décomposition technique et tickets IMPLEMENT"},
+        {"name": f"backend", "role": "backend", "is_system": True,
+         "instruction": "Backend Dev — Supabase Cloud, SQL, Edge Functions"},
+        {"name": f"frontend", "role": "frontend", "is_system": True,
+         "instruction": "Frontend Dev — Expo, React Native, TypeScript"},
+        {"name": f"master-agent", "role": "master-agent", "is_system": True,
+         "instruction": "Master Agent — coordination, bugs, triage"},
+    ]
+    for d in defaults:
+        existing = get_profile_template(d["name"], project_slug)
+        if not existing:
+            add_profile_template(
+                name=d["name"],
+                project_slug=project_slug,
+                role=d["role"],
+                instruction=d["instruction"],
+                is_system=d["is_system"],
+            )
