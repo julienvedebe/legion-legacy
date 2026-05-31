@@ -264,7 +264,25 @@ def render_body(template: str | None, **kwargs) -> str | None:
 
 # ── Advance stage ──
 
-def advance_stage(board: str, current_stage: str, prefix: str, slug: str, name: str, stage_order: list):
+def run_stitch_export(work_dir: str, slug: str):
+    """Export Stitch screens for a project if they exist."""
+    import subprocess
+    stitch_script = os.path.expanduser("~/.legion/scripts/legion-stitch-export.py")
+    if os.path.isfile(stitch_script):
+        try:
+            result = subprocess.run(
+                [sys.executable, stitch_script, slug, "--remap"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode == 0:
+                print(f"  ✅ Maquettes Stitch exportées")
+            else:
+                print(f"  ℹ️  Export Stitch: {result.stdout.strip()[-200:]}")
+        except Exception as e:
+            print(f"  ℹ️  Export Stitch ignoré: {e}")
+
+
+def advance_stage(board: str, current_stage: str, prefix: str, slug: str, name: str, stage_order: list, work_dir: str = "", project_slug: str = ""):
     """Advance to the next stage or mark done."""
     idx = stage_order.index(current_stage) + 1
     if idx >= len(stage_order):
@@ -276,6 +294,10 @@ def advance_stage(board: str, current_stage: str, prefix: str, slug: str, name: 
         set_pipeline_stage(board, prefix, next_stage)
         print(f"  ▶ Prochain stage: {stage_label(next_stage)}")
         print(f"     Lance 'legion pipeline <project> {prefix}' pour continuer.")
+
+    # Post-advance hooks
+    if current_stage == "DESIGN" and work_dir and project_slug:
+        run_stitch_export(work_dir, project_slug)
 
 
 # ── Reset ──
@@ -375,7 +397,7 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
             return 0
         elif card_status == "done":
             print(f"ℹ️  Carte {stage_label(stage)} déjà faite — advancement automatique")
-            advance_stage(board, stage, prefix, slug, name, stage_order)
+            advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
             conn.close()
             return 0
         else:
