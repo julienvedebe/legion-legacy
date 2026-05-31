@@ -1448,7 +1448,7 @@ async def expo_start(slug: str, port: int = 0):
         expo_bin = "npx expo"
 
     proc = subprocess.Popen(
-        f"cd {work_dir} && {expo_bin} start --port {chosen_port} > {log_file} 2>&1",
+        f"cd {work_dir} && {expo_bin} start --clear --port {chosen_port} > {log_file} 2>&1",
         shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
 

@@ -28,3 +28,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+legion-deploy-key
+legion-deploy-key.pub
+git-ssh-wrapper.sh
