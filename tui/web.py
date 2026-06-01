@@ -8,6 +8,7 @@ import argparse
 import base64
 import html
 import io
+import json
 import mimetypes
 import os
 import re
@@ -1903,8 +1904,23 @@ async def api_profile_activate(slug: str, request: Request):
 
     update_profile_active(name, slug, True)
     msg = f"✅ Profil '{name}' activé → ~/.hermes/profiles/{profile_name}/"
-    if p.get("channel_id"):
-        msg += f"\n   Canal: {p['channel_id']}\n   ⚠️ Redémarre la gateway: hermes gateway restart"
+
+    # Write to Legion channel_prompts.json for hot-reload (no gateway restart)
+    channel_id = p.get("channel_id", "")
+    if channel_id:
+        LEGION_PROMPTS = os.path.expanduser("~/.legion/channel_prompts.json")
+        current = {}
+        if os.path.exists(LEGION_PROMPTS):
+            try:
+                with open(LEGION_PROMPTS) as f:
+                    current = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                current = {}
+        current[str(channel_id)] = instruction
+        with open(LEGION_PROMPTS, "w") as f:
+            json.dump(current, f, indent=2, ensure_ascii=False)
+        msg += f"\n   Canal Discord: {channel_id}"
+
     return {"success": True, "message": msg}
 
 
