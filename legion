@@ -31,8 +31,7 @@ Commandes:
   status <PREFIX>        Statut d'une feature
   pipeline <PREFIX>      Lancer la pipeline d'une feature
   pipeline <PREFIX> --reset  Réinitialiser la pipeline
-  tui                    Lancer l'interface TUI (dashboard)
-  serve|web              Lancer le serveur web (textual-serve)
+  sync                   Synchroniser avec Supabase Cloud (Face B)
   -p <slug>              Cibler un projet spécifique
   stitch export <slug>    Exporter les screens Stitch en HTML local
   stitch export -l        Lister les screens Stitch
@@ -99,11 +98,8 @@ case "${ARGS[0]}" in
         fi
         python3 "$LEGION_CLI" --project "$PROJECT" status "${ARGS[1]}"
         ;;
-    tui)
-        python3 "${LEGION_HOME}/tui/app.py" --project "$PROJECT"
-        ;;
-    serve|web)
-        python3 "${LEGION_HOME}/tui/web.py" --port 8000 --host 0.0.0.0
+    sync)
+        python3 "$LEGION_CLI" --project "$PROJECT" sync "${ARGS[@]:1}"
         ;;
     stitch)
         python3 "${LEGION_HOME}/scripts/legion-stitch-export.py" "${ARGS[@]:1}"

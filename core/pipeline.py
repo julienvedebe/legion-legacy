@@ -376,6 +376,13 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
         print("  Utilise 'legion pipeline <project> <prefix> --reset' pour relancer")
         conn.close()
         return 0
+    elif stage not in stage_order:
+        # Invalid stage (e.g. "backlog") — re-initialize to first valid stage
+        stage = detect_initial_stage(work_dir, slug, stage_order, doc_patterns)
+        set_pipeline_stage(board, prefix, stage)
+        print(f"  ⚠️ Stage '{stage}' invalide — réinitialisé à {stage_label(stage)}")
+        conn.close()
+        return run_pipeline(project_slug, prefix)
     else:
         idx = stage_order.index(stage) + 1 if stage in stage_order else 1
         print(f"  ▶ [{idx}/{len(stage_order)}] {stage_label(stage)}")

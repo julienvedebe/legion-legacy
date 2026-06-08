@@ -438,6 +438,14 @@ def main():
     # init
     p_init = sub.add_parser("init", help="Initialiser la DB Légion")
 
+    # sync
+    p_sync = sub.add_parser("sync", help="Synchroniser avec Supabase Cloud (Face B)")
+    p_sync.add_argument("project_slug", nargs="?", help="Slug du projet (optionnel)")
+    p_sync.add_argument("--status", action="store_true", help="Voir l'état de la dernière sync")
+    p_sync.add_argument("--pull", action="store_true", help="Sync inverse : commentaires ← origin")
+    p_sync.add_argument("--features", action="store_true", help="Sync uniquement les features")
+    p_sync.add_argument("--wiki", action="store_true", help="Sync uniquement le wiki")
+
     # pipeline
     p_pipeline = sub.add_parser("pipeline", help="Lancer la pipeline pour une feature")
     p_pipeline.add_argument("prefix", help="Préfixe de la feature (ex: AUTH)")
@@ -476,6 +484,17 @@ def main():
     if args.command == "init":
         init_db()
         print("✅ Base Légion initialisée (~/.legion/db/legion.db)")
+
+    elif args.command == "sync":
+        project_slug = args.project_slug or args.project or os.environ.get("LEGION_PROJECT")
+        if args.status:
+            print("ℹ️  Sync status — à implémenter dans LEG-V2-04")
+        else:
+            print(f"ℹ️  Legion sync — à implémenter dans LEG-V2-04")
+            print(f"   Projet: {project_slug or '(tous)'}")
+            print(f"   --pull: {'oui' if args.pull else 'non'}")
+            print(f"   --features: {'oui' if args.features else 'non'}")
+            print(f"   --wiki: {'oui' if args.wiki else 'non'}")
 
     elif args.command == "projects":
         if args.action == "list":
