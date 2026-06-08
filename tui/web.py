@@ -775,6 +775,25 @@ h2 {
 .pipeline-btn:disabled { opacity: 0.5; cursor: wait; }
 .pipeline-btn.running { background: #854d0e; border-color: #f59e0b; color: #fde68a; }
 
+/* ── Skip Stage Button ── */
+.skip-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid #a855f7;
+    background: #3b0764;
+    color: #d8b4fe;
+    cursor: pointer;
+    margin-top: 6px;
+    margin-left: 6px;
+    transition: all 0.15s;
+}
+.skip-btn:hover { background: #9333ea; color: #fff; border-color: #c084fc; }
+
 /* ── Toast Notification ── */
 #toast {
     position: fixed;
@@ -1179,6 +1198,26 @@ def _page(title: str, body: str, project_link: str = "") -> str:
                 btn.disabled = false;
                 btn.className = 'pipeline-btn';
                 btn.textContent = '▶ Pipeline';
+                showToast('❌ Erreur réseau: ' + err.message, 'error');
+            }});
+    }}
+
+    // Skip stage handler
+    function skipStage(slug, prefix, stage) {{
+        if (!confirm('⏭ Skip ' + stage + ' for ' + prefix + '?')) return;
+        var url = '/api/' + slug + '/pipeline/' + prefix + '?skip_stages=' + stage;
+        showToast('⏭ Skipping ' + stage + '...', 'info');
+        fetch(url, {{ method: 'POST' }})
+            .then(function(r) {{ return r.json(); }})
+            .then(function(data) {{
+                if (data.success) {{
+                    showToast('✅ ' + stage + ' skipped!', 'success');
+                }} else {{
+                    showToast('❌ Skip failed: ' + (data.error || data.output), 'error');
+                }}
+                setTimeout(function() {{ location.reload(); }}, 800);
+            }})
+            .catch(function(err) {{
                 showToast('❌ Erreur réseau: ' + err.message, 'error');
             }});
     }}
@@ -3152,6 +3191,13 @@ async def project_detail(slug: str):
         # Count tickets for progress bar
         done, total, _ = _count_tickets(slug, f['prefix'])
 
+        # Compute skip button (f-string can't have backslashes in expressions)
+        skip_btn = ""
+        if stage_key not in ("backlog", "done") and stage != "IMPLEMENT":
+            skip_btn = '<button class="skip-btn" onclick="skipStage('
+            skip_btn += '"' + slug + '", "' + f["prefix"] + '", "' + stage + '")'
+            skip_btn += '">⏭ Skip ' + stage + '</button>'
+
         features_html += f"""
         <div class="card">
             <div class="card-row">
@@ -3164,6 +3210,7 @@ async def project_detail(slug: str):
             <span class="stage {stage_class}">{stage_label}</span>
             {_progress_bar(done, total)}
             <button class="pipeline-btn" data-slug="{slug}" data-prefix="{f['prefix']}" onclick="runPipeline(this)">▶ Pipeline</button>
+            {skip_btn}
         </div>"""
 
     if not features_html:
