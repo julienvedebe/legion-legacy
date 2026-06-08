@@ -446,7 +446,14 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
     if parent_id:
         print(f"   Parent: {parent_id}")
 
-    # 8. Create the card
+    # 8. Create the card (unless IMPLEMENT — the architect creates specific tickets)
+    if stage == "IMPLEMENT":
+        print(f"  ℹ️  Stage IMPLEMENT — pas de carte générique")
+        print(f"     L'architecte a créé les tickets IMPLEMENT spécifiques via kanban_create")
+        print(f"     Le statut de la feature reste à 'implement'.\n")
+        conn.close()
+        return 0
+
     profile = stage_profiles.get(stage, "default")
     # Default body for ARCHITECT — tell the agent to create IMPLEMENT tickets
     default_body = None
