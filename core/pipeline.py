@@ -337,7 +337,7 @@ def reset_pipeline(board: str, prefix: str, stage_order: list):
 # Main run
 # ═══════════════════════════════════════════════════════════════
 
-def run_pipeline(project_slug: str, prefix: str, reset: bool = False, _card_just_advanced: bool = False, skip_stages: list | None = None) -> int:
+def run_pipeline(project_slug: str, prefix: str, reset: bool = False, skip_stages: list | None = None) -> int:
     """Run the pipeline for a feature. Returns exit code.
 
     skip_stages: list of stage names (e.g. ['DESIGN']) to skip without creating cards.
@@ -420,7 +420,7 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False, _card_just
         print(f"  ⏭ Stage {stage_label(stage)} skipped")
         conn.close()
         advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
-        return run_pipeline(project_slug, prefix, _card_just_advanced=True, skip_stages=skip_stages)
+        return run_pipeline(project_slug, prefix, skip_stages=skip_stages)
 
     # 6. Check if a card for this stage already exists
     found_cards = find_stage_cards(c, stage, prefix, slug, name=name)
@@ -442,9 +442,8 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False, _card_just
             print(f"ℹ️  Carte {stage_label(stage)} déjà faite — avancement au stage suivant")
             advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
             conn.close()
-            # Récurse: l'advance_stage ci-dessus a déjà mis pipeline_stage au suivant,
-            # donc la récursion créera la carte du nouveau stage sans ré-avancer
-            return run_pipeline(project_slug, prefix, _card_just_advanced=True)
+            # Récurse: crée la carte du nouveau stage, puis advance_stage la fera avancer à son tour
+            return run_pipeline(project_slug, prefix, skip_stages=skip_stages)
         else:
             print(f"ℹ️  Carte en statut {card_status} — rien à faire")
             conn.close()
@@ -497,9 +496,8 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False, _card_just
         print(f"\n✅ Carte « {title} » créée (ID: {card_id}) — en ready")
 
         # Avancer le pipeline_stage au stage suivant
-        # (sauf si déjà avancé par la détection "done" du parent récursif)
-        if not _card_just_advanced:
-            advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
+        # Prochain clic sur Pipeline créera la carte du stage suivant
+        advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
     else:
         print(f"\n❌ Erreur création: {stderr or stdout}")
         conn.close()
