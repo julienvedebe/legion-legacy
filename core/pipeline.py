@@ -448,8 +448,24 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
 
     # 8. Create the card
     profile = stage_profiles.get(stage, "default")
+    # Default body for ARCHITECT — tell the agent to create IMPLEMENT tickets
+    default_body = None
+    if stage == "ARCHITECT":
+        default_body = (
+            f"## Mission\n"
+            f"1. Lis la spec produit et le design\n"
+            f"2. Rédige le document d'architecture ({work_dir}/docs/architecture/archi-{slug}.md)\n"
+            f"3. **Crée les tickets [IMPLEMENT]** avec kanban_create pour chaque unité de travail\n"
+            f"4. Assigne chaque ticket au bon profil du projet\n"
+            f"5. Auto-commit ton doc d'architecture\n"
+            f"6. kanban_complete\n"
+            f"\n"
+            f"## IMPORTANT — Tu DOIS créer les tickets IMPLEMENT\n"
+            f"Utilise `kanban_create(title=\"[IMPLEMENT] {prefix}-NN: description\", assignee=\"<profil>\")`\n"
+            f"pour chaque ticket. Un ticket = une unité de travail atomique.\n"
+        )
     body = render_body(
-        body_templates.get(stage),
+        body_templates.get(stage) or default_body,
         slug=slug, prefix=prefix, name=name, work_dir=work_dir,
     )
 
