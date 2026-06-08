@@ -286,7 +286,7 @@ def run_stitch_export(work_dir: str, slug: str):
 
 
 def advance_stage(board: str, current_stage: str, prefix: str, slug: str, name: str, stage_order: list, work_dir: str = "", project_slug: str = ""):
-    """Advance to the next stage or mark done."""
+    """Advance to the next stage or mark done. Creates the next card automatically."""
     idx = stage_order.index(current_stage) + 1
     if idx >= len(stage_order):
         set_pipeline_stage(board, prefix, "done")
@@ -298,11 +298,82 @@ def advance_stage(board: str, current_stage: str, prefix: str, slug: str, name: 
         set_pipeline_stage(board, prefix, next_stage)
         print(f"  ▶ Prochain stage: {stage_label(next_stage)}")
         _update_feature_status_in_legion_db(slug, project_slug, next_stage)
-        print(f"     Lance 'legion pipeline <project> {prefix}' pour continuer.")
+
+        # Create the next card immediately (unless IMPLEMENT — architect does it)
+        if next_stage != "IMPLEMENT":
+            _create_next_stage_card(board, next_stage, prefix, slug, name, work_dir)
+        else:
+            print(f"  ℹ️  Stage IMPLEMENT — pas de carte générique, l'architecte créera ses tickets.")
 
     # Post-advance hooks
     if current_stage == "DESIGN" and work_dir and project_slug:
         run_stitch_export(work_dir, project_slug)
+
+
+def _create_next_stage_card(board: str, stage: str, prefix: str, slug: str, name: str, work_dir: str):
+    """Create a Kanban card for the given pipeline stage."""
+    from core.db import get_project
+    # Find the project slug from board (used for profile lookup)
+    proj = _find_project_by_board(board)
+    if not proj:
+        print(f"  ⚠️  Impossible de trouver le projet pour board '{board}'")
+        return
+
+    cfg = proj.get("pipeline_config", {})
+    stage_profiles = cfg.get("stage_profiles", DEFAULT_STAGE_PROFILES)
+    body_templates = cfg.get("body_templates", {})
+
+    # Default body for ARCHITECT
+    default_body = None
+    if stage == "ARCHITECT":
+        default_body = (
+            f"## Mission\n"
+            f"1. Lire spec + design\n"
+            f"2. Ecrire docs/architecture/archi-{slug}.md\n"
+            f"3. Creer les tickets IMPLEMENT avec kanban_create\n"
+            f"4. Assigner les bons profils (backend, frontend)\n"
+            f"5. Auto-commit + kanban_complete\n"
+        )
+
+    body = render_body(
+        body_templates.get(stage) or default_body,
+        slug=slug, prefix=prefix, name=name, work_dir=work_dir,
+    )
+
+    profile = stage_profiles.get(stage, "default")
+    title = f"[{stage}] {name}"
+    stdout, stderr, rc = create_card(title, profile, None, board, body=body, work_dir=work_dir)
+
+    if rc == 0:
+        match = re.search(r"(t_[a-z0-9]+)", stdout)
+        card_id = match.group(1) if match else "?"
+        # Set status to ready
+        kanban_db = _kanban_db_path(board)
+        if kanban_db.exists():
+            conn = sqlite3.connect(str(kanban_db))
+            try:
+                now = int(time.time())
+                conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (card_id,))
+                conn.execute(
+                    "INSERT INTO task_events (task_id, kind, payload, created_at) "
+                    "VALUES (?, 'status', ?, ?)",
+                    (card_id, json.dumps({"status": "ready", "by": "user:pipeline-auto"}), now),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        print(f"  ✅ Carte « {title} » créée (ID: {card_id}) — en ready")
+    else:
+        print(f"  ❌ Erreur création carte: {stderr or stdout}")
+
+
+def _find_project_by_board(board: str) -> dict | None:
+    """Helper: find project that owns this board."""
+    from core.db import list_projects, get_project
+    for p in list_projects():
+        if p.get("board") == board:
+            return get_project(p["slug"])
+    return None
 
 
 def _update_feature_status_in_legion_db(slug: str, project_slug: str, stage: str):

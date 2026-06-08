@@ -1,170 +1,222 @@
 #!/usr/bin/env python3
 """
-Pipeline Auto-Advance — détecte les features dont la carte du stage actuel
-est 'done' et lance le pipeline centralisé pour créer la carte du stage suivant.
+Pipeline Auto-Advance — Surveille TOUS les projets actifs et enchaîne
+automatiquement le pipeline quand une carte du stage courant est complétée.
 
 Usage:
-    python3 ~/.legion/scripts/pipeline-auto-advance.py [--dry-run]
+    python3 pipeline-auto-advance.py
+    python3 pipeline-auto-advance.py --project legion-v2   # Un seul projet
+    python3 pipeline-auto-advance.py --dry-run              # Simulation
 
-Cron recommandé : toutes les 5 minutes
+Sécurité: ne crée des cartes que pour les features qui ont un pipeline_stage
+existant dans feature_meta (pas de création sauvage).
 """
+
 import json
-import os
-import re
 import sqlite3
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-LEGION_DB = Path.home() / ".legion" / "db" / "legion.db"
-PIPELINE_SCRIPT = Path.home() / ".legion" / "core" / "pipeline.py"
-KANBAN_BASE = Path.home() / ".hermes" / "kanban" / "boards"
-
-STAGE_ORDER = ["EXPLORE", "SPEC", "DESIGN", "ARCHITECT", "IMPLEMENT"]
-PIPELINE_LABEL = {s: f"[{s}]" for s in STAGE_ORDER}
+HERMES_HOME = Path.home() / ".hermes"
+LEGION_HOME = Path.home() / ".legion"
+DEFAULT_STAGE_ORDER = ["EXPLORE", "SPEC", "DESIGN", "ARCHITECT", "IMPLEMENT"]
 
 
-def get_active_projects():
-    """Return active or draft project slugs (draft counts for legion-v2 style projects)."""
-    conn = sqlite3.connect(str(LEGION_DB))
-    rows = conn.execute("SELECT slug, board FROM projects WHERE status IN ('active', 'draft')").fetchall()
-    conn.close()
-    return rows
+def get_active_projects() -> list[dict]:
+    """Load all active/draft projects from legion.db."""
+    db = LEGION_HOME / "db" / "legion.db"
+    if not db.exists():
+        return []
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT slug, name, board, work_dir, pipeline_config, status "
+            "FROM projects WHERE status IN ('active', 'draft')"
+        ).fetchall()
+        projects = []
+        for r in rows:
+            p = dict(r)
+            p["pipeline_config"] = json.loads(p.get("pipeline_config", "{}"))
+            projects.append(p)
+        return projects
+    finally:
+        conn.close()
 
 
-def get_features(project_slug):
-    """Return features for a project: (slug, prefix, name)"""
-    conn = sqlite3.connect(str(LEGION_DB))
-    rows = conn.execute(
-        "SELECT slug, prefix, name FROM features WHERE project_slug=?", (project_slug,)
-    ).fetchall()
-    conn.close()
-    return rows
+def get_features_for_project(project_slug: str) -> list[dict]:
+    """Get features for a project from legion.db."""
+    db = LEGION_HOME / "db" / "legion.db"
+    if not db.exists():
+        return []
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT slug, prefix, name FROM features WHERE project_slug=?",
+            (project_slug,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
-def get_pipeline_stage(board, prefix):
+def get_pipeline_stage(board: str, prefix: str) -> str | None:
     """Read pipeline_stage from kanban features.db."""
-    feat_db = KANBAN_BASE / board / "features.db"
-    if not feat_db.exists():
+    db = HERMES_HOME / "kanban" / "boards" / board / "features.db"
+    if not db.exists():
         return None
     try:
-        conn = sqlite3.connect(str(feat_db))
-        row = conn.execute(
+        conn = sqlite3.connect(str(db))
+        c = conn.cursor()
+        c.execute(
             "SELECT value FROM feature_meta WHERE slug=? AND key='pipeline_stage'",
             (prefix,),
-        ).fetchone()
+        )
+        row = c.fetchone()
         conn.close()
         return row[0] if row else None
     except Exception:
         return None
 
 
-def find_done_card(board, stage, feat_name="", feat_slug=""):
-    """Check if the latest card with [STAGE] prefix for this board is 'done'
-    and belongs to the given feature (by name or slug words)."""
-    kanban_db = KANBAN_BASE / board / "kanban.db"
-    if not kanban_db.exists():
+def get_current_stage_card(kanban_db_path: Path, stage: str, feature_name: str, feature_slug: str) -> dict | None:
+    """Find the card for the current pipeline stage of this feature.
+
+    Title format is f'[{stage}] {name}' — the card title uses the feature NAME,
+    not the slug or prefix. We search by stage keyword + name/slug parts.
+    """
+    if not kanban_db_path.exists():
         return None
+
+    conn = sqlite3.connect(str(kanban_db_path))
+    conn.row_factory = sqlite3.Row
     try:
-        conn = sqlite3.connect(str(kanban_db))
-        rows = conn.execute(
-            """SELECT id, title FROM tasks
-               WHERE title LIKE ? AND status='done'
-               ORDER BY completed_at DESC LIMIT 20""",
-            (f"%[{stage}] %",),
+        # Search by stage keyword
+        cards = conn.execute(
+            "SELECT id, title, status, completed_at FROM tasks "
+            "WHERE title LIKE ? AND status NOT IN ('archived') "
+            "ORDER BY created_at DESC LIMIT 20",
+            (f"%{stage}%",),
         ).fetchall()
-        conn.close()
-        if not rows:
-            return None
-        # Filter by feature name/slug
-        keywords = set()
-        if feat_name:
-            for w in feat_name.lower().split():
+
+        # Build filter keywords
+        filter_keywords = set()
+        if feature_name:
+            for w in feature_name.lower().split():
                 if len(w) > 3:
-                    keywords.add(w)
-        for w in feat_slug.replace("-", " ").lower().split():
+                    filter_keywords.add(w)
+        slug_words = feature_slug.replace("-", " ").lower().split()
+        for w in slug_words:
             if len(w) > 3:
-                keywords.add(w)
-        if not keywords:
-            return rows[0] if rows else None
-        for cid, title in rows:
-            title_lower = title.lower()
-            if any(kw in title_lower for kw in keywords):
-                return (cid, title)
+                filter_keywords.add(w)
+
+        for card in cards:
+            title_lower = card["title"].lower()
+            # Must start with [STAGE]
+            if not title_lower.startswith(f"[{stage.lower()}]"):
+                continue
+            if any(kw in title_lower for kw in filter_keywords):
+                return dict(card)
         return None
-    except Exception:
-        return None
+    finally:
+        conn.close()
 
 
-def run_pipeline(project_slug, prefix, dry_run=False):
-    """Run the centralized pipeline for a feature."""
-    if dry_run:
-        print(f"  [DRY-RUN] python3 {PIPELINE_SCRIPT} {project_slug} {prefix}")
-        return True
+def run_pipeline(project_slug: str, prefix: str) -> tuple[str, int]:
+    """Run legion pipeline for a feature via the centralized engine."""
+    script = LEGION_HOME / "core" / "pipeline.py"
     try:
         result = subprocess.run(
-            [sys.executable, str(PIPELINE_SCRIPT), project_slug, prefix],
-            capture_output=True, text=True, timeout=120,
+            [sys.executable, str(script), project_slug, prefix.upper()],
+            capture_output=True, text=True, timeout=60,
         )
-        output = result.stdout + result.stderr
-        if result.returncode == 0:
-            print(f"  ✅ {project_slug} {prefix} — OK")
-            return True
-        else:
-            print(f"  ⚠️  {project_slug} {prefix} — exit={result.returncode}: {output[:200]}")
-            return False
+        output = (result.stdout + result.stderr).strip()
+        return output, result.returncode
     except subprocess.TimeoutExpired:
-        print(f"  ⚠️  {project_slug} {prefix} — timeout")
-        return False
+        return f"Timeout (60s) for {project_slug} {prefix}", 1
     except Exception as e:
-        print(f"  ❌ {project_slug} {prefix} — {e}")
-        return False
+        return f"Error: {e}", 1
+
+
+def format_stage(stage: str) -> str:
+    labels = {
+        "EXPLORE": "Exploration", "SPEC": "Spec", "DESIGN": "Design",
+        "ARCHITECT": "Architecture", "IMPLEMENT": "Implémentation",
+    }
+    return labels.get(stage, stage)
 
 
 def main():
-    dry_run = "--dry-run" in sys.argv
-    now = int(time.time())
-    advanced = 0
-
-    print(f"Pipeline Auto-Advance — {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  Dry-run: {'OUI' if dry_run else 'NON'}")
-    print()
+    import argparse
+    parser = argparse.ArgumentParser(description="Pipeline auto-advance watchdog")
+    parser.add_argument("--project", "-p", default=None, help="Project slug (default: all)")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate without creating cards")
+    args = parser.parse_args()
 
     projects = get_active_projects()
     if not projects:
-        print("Aucun projet actif.")
-        return 0
+        print("Aucun projet actif trouvé.")
+        return
 
-    for slug, board in projects:
-        print(f"--- {slug} (board: {board}) ---")
-        features = get_features(slug)
-        if not features:
-            print("  Aucune feature.")
+    if args.project:
+        projects = [p for p in projects if p["slug"] == args.project]
+        if not projects:
+            print(f"Projet '{args.project}' introuvable.")
+            return
+
+    total_advanced = 0
+    for proj in projects:
+        slug = proj["slug"]
+        board = proj["board"]
+        stage_order = proj.get("pipeline_config", {}).get("stage_order", DEFAULT_STAGE_ORDER)
+        kanban_db = HERMES_HOME / "kanban" / "boards" / board / "kanban.db"
+
+        if not kanban_db.exists():
             continue
 
-        for feat_slug, prefix, name in features:
-            stage = get_pipeline_stage(board, prefix)
-            if not stage or stage == "done" or stage not in STAGE_ORDER:
-                continue
+        features = get_features_for_project(slug)
+        if not features:
+            continue
 
-            card = find_done_card(board, stage, feat_name=name, feat_slug=feat_slug)
+        for feat in features:
+            prefix = feat["prefix"]
+            pipeline_stage = get_pipeline_stage(board, prefix)
+
+            if not pipeline_stage or pipeline_stage == "done":
+                continue  # Pas encore lancé ou déjà terminé
+
+            if pipeline_stage not in stage_order:
+                continue  # Stage invalide
+
+            card = get_current_stage_card(kanban_db, pipeline_stage, feat["name"], feat["slug"])
             if not card:
                 continue
 
-            card_id, card_title = card
-            print(f"  {prefix} ({name}):")
-            print(f"    Stage actuel: {stage}")
-            print(f"    Carte done: {card_id} — {card_title}")
-            print(f"    → Lancement du pipeline...")
-            ok = run_pipeline(slug, prefix, dry_run=dry_run)
-            if ok:
-                advanced += 1
-            print()
+            if card["status"] == "done":
+                if args.dry_run:
+                    print(f"🔍 [{slug}/{prefix}] {format_stage(pipeline_stage)} done → "
+                          f"avancerait au stage suivant")
+                    continue
 
-    print(f"--- Terminé: {advanced} feature(s) avancée(s) ---")
-    return 0
+                print(f"▶ [{slug}/{prefix}] {format_stage(pipeline_stage)} done → "
+                      f"lancement advancement...")
+
+                output, rc = run_pipeline(slug, prefix)
+                # Filtrer le output pour un résumé court
+                summary_lines = [l for l in output.split("\n") if l.strip() and "ℹ️" not in l]
+                summary = "\n  ".join(summary_lines[-6:])  # Dernières lignes utiles
+                if rc == 0:
+                    print(f"  ✅ OK: {summary[:300]}")
+                    total_advanced += 1
+                else:
+                    print(f"  ❌ Erreur (rc={rc}): {summary[:300]}")
+
+    if total_advanced == 0:
+        print("Rien à avancer. ✓")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
