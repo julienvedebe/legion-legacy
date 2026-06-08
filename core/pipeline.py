@@ -286,94 +286,21 @@ def run_stitch_export(work_dir: str, slug: str):
 
 
 def advance_stage(board: str, current_stage: str, prefix: str, slug: str, name: str, stage_order: list, work_dir: str = "", project_slug: str = ""):
-    """Advance to the next stage or mark done. Creates the next card automatically."""
+    """Advance pipeline_stage to the next stage (or done). Ne crée pas de carte."""
     idx = stage_order.index(current_stage) + 1
     if idx >= len(stage_order):
         set_pipeline_stage(board, prefix, "done")
         print(f"  ✅ Pipeline terminée pour {name} !")
-        print(f"     Marqué comme done dans feature_meta.")
         _update_feature_status_in_legion_db(slug, project_slug, "done")
     else:
         next_stage = stage_order[idx]
         set_pipeline_stage(board, prefix, next_stage)
-        print(f"  ▶ Prochain stage: {stage_label(next_stage)}")
+        print(f"  ▶ Stade avancé: {stage_label(next_stage)}")
         _update_feature_status_in_legion_db(slug, project_slug, next_stage)
-
-        # Create the next card immediately (unless IMPLEMENT — architect does it)
-        if next_stage != "IMPLEMENT":
-            _create_next_stage_card(board, next_stage, prefix, slug, name, work_dir)
-        else:
-            print(f"  ℹ️  Stage IMPLEMENT — pas de carte générique, l'architecte créera ses tickets.")
 
     # Post-advance hooks
     if current_stage == "DESIGN" and work_dir and project_slug:
         run_stitch_export(work_dir, project_slug)
-
-
-def _create_next_stage_card(board: str, stage: str, prefix: str, slug: str, name: str, work_dir: str):
-    """Create a Kanban card for the given pipeline stage."""
-    from core.db import get_project
-    # Find the project slug from board (used for profile lookup)
-    proj = _find_project_by_board(board)
-    if not proj:
-        print(f"  ⚠️  Impossible de trouver le projet pour board '{board}'")
-        return
-
-    cfg = proj.get("pipeline_config", {})
-    stage_profiles = cfg.get("stage_profiles", DEFAULT_STAGE_PROFILES)
-    body_templates = cfg.get("body_templates", {})
-
-    # Default body for ARCHITECT
-    default_body = None
-    if stage == "ARCHITECT":
-        default_body = (
-            f"## Mission\n"
-            f"1. Lire spec + design\n"
-            f"2. Ecrire docs/architecture/archi-{slug}.md\n"
-            f"3. Creer les tickets IMPLEMENT avec kanban_create\n"
-            f"4. Assigner les bons profils (backend, frontend)\n"
-            f"5. Auto-commit + kanban_complete\n"
-        )
-
-    body = render_body(
-        body_templates.get(stage) or default_body,
-        slug=slug, prefix=prefix, name=name, work_dir=work_dir,
-    )
-
-    profile = stage_profiles.get(stage, "default")
-    title = f"[{stage}] {name}"
-    stdout, stderr, rc = create_card(title, profile, None, board, body=body, work_dir=work_dir)
-
-    if rc == 0:
-        match = re.search(r"(t_[a-z0-9]+)", stdout)
-        card_id = match.group(1) if match else "?"
-        # Set status to ready
-        kanban_db = _kanban_db_path(board)
-        if kanban_db.exists():
-            conn = sqlite3.connect(str(kanban_db))
-            try:
-                now = int(time.time())
-                conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (card_id,))
-                conn.execute(
-                    "INSERT INTO task_events (task_id, kind, payload, created_at) "
-                    "VALUES (?, 'status', ?, ?)",
-                    (card_id, json.dumps({"status": "ready", "by": "user:pipeline-auto"}), now),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-        print(f"  ✅ Carte « {title} » créée (ID: {card_id}) — en ready")
-    else:
-        print(f"  ❌ Erreur création carte: {stderr or stdout}")
-
-
-def _find_project_by_board(board: str) -> dict | None:
-    """Helper: find project that owns this board."""
-    from core.db import list_projects, get_project
-    for p in list_projects():
-        if p.get("board") == board:
-            return get_project(p["slug"])
-    return None
 
 
 def _update_feature_status_in_legion_db(slug: str, project_slug: str, stage: str):
@@ -410,7 +337,7 @@ def reset_pipeline(board: str, prefix: str, stage_order: list):
 # Main run
 # ═══════════════════════════════════════════════════════════════
 
-def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
+def run_pipeline(project_slug: str, prefix: str, reset: bool = False, _card_just_advanced: bool = False) -> int:
     """Run the pipeline for a feature. Returns exit code."""
     prefix = prefix.upper()
 
@@ -501,12 +428,12 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
             conn.close()
             return 0
         elif card_status == "done":
-            print(f"ℹ️  Carte {stage_label(stage)} déjà faite — advancement automatique")
+            print(f"ℹ️  Carte {stage_label(stage)} déjà faite — avancement au stage suivant")
             advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
             conn.close()
-            # Récurse pour créer la carte du PROCHAIN stage (sinon l'user ne voit rien)
-            print(f"     → Création de la carte pour le nouveau stage...\n")
-            return run_pipeline(project_slug, prefix)
+            # Récurse: l'advance_stage ci-dessus a déjà mis pipeline_stage au suivant,
+            # donc la récursion créera la carte du nouveau stage sans ré-avancer
+            return run_pipeline(project_slug, prefix, _card_just_advanced=True)
         else:
             print(f"ℹ️  Carte en statut {card_status} — rien à faire")
             conn.close()
@@ -557,16 +484,18 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
             )
             conn.commit()
         print(f"\n✅ Carte « {title} » créée (ID: {card_id}) — en ready")
+
+        # Avancer le pipeline_stage au stage suivant
+        # (sauf si déjà avancé par la détection "done" du parent récursif)
+        if not _card_just_advanced:
+            advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
     else:
         print(f"\n❌ Erreur création: {stderr or stdout}")
         conn.close()
         return 1
 
-    # 9. PAS d'advance ici — la carte vient d'être créée.
-    #    L'avancement se fait uniquement quand find_stage_cards détecte
-    #    que la carte du stage actuel est "done" (ligne ~250).
-    #    Sinon toutes les cartes sont "ready" simultanément → dispatcher
-    #    les prend dans n'importe quel ordre.
+    # 9. Pipeline_stage avancé au stage suivant (via advance_stage ci-dessus).
+    #    Prochain clic sur Pipeline créera la carte du stage suivant.
 
     conn.commit()
     print(f"\n   Le dispatcher va la picker dans ~60s")
