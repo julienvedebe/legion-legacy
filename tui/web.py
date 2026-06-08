@@ -1917,63 +1917,20 @@ async def api_activate_project(slug: str):
     board = proj["board"]
     name = proj["name"]
 
-    # 1. Create Kanban board (schema from standard)
+    # 1. Create Kanban board via Hermes CLI (guarantees correct schema)
+    import subprocess
     board_dir = os.path.expanduser(f"~/.hermes/kanban/boards/{board}")
     os.makedirs(board_dir, exist_ok=True)
     db_path = os.path.join(board_dir, "kanban.db")
     if not os.path.isfile(db_path):
-        conn = sqlite3.connect(db_path)
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                status TEXT DEFAULT 'todo',
-                assignee TEXT,
-                priority INTEGER DEFAULT 0,
-                tags TEXT DEFAULT '[]',
-                body TEXT DEFAULT '',
-                parent_id TEXT,
-                workspace TEXT DEFAULT '',
-                metadata TEXT DEFAULT '{}',
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                completed_at INTEGER
-            );
-            CREATE TABLE IF NOT EXISTS task_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-                run_id TEXT,
-                kind TEXT,
-                payload TEXT DEFAULT '{}',
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS task_links (
-                parent_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-                child_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-                relation TEXT DEFAULT 'depends_on',
-                PRIMARY KEY (parent_id, child_id)
-            );
-            CREATE TABLE IF NOT EXISTS task_runs (
-                id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-                worker TEXT,
-                status TEXT DEFAULT 'running',
-                started_at INTEGER,
-                finished_at INTEGER
-            );
-            CREATE TABLE IF NOT EXISTS kanban_notify_subs (
-                channel TEXT NOT NULL,
-                event TEXT NOT NULL,
-                filter TEXT DEFAULT '*',
-                PRIMARY KEY (channel, event)
-            );
-            PRAGMA journal_mode=WAL;
-            PRAGMA foreign_keys=ON;
-        """)
-        conn.commit()
-        conn.close()
+        result = subprocess.run(
+            ["hermes", "kanban", "boards", "create", board],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return {"success": False, "error": f"Échec création board Kanban: {result.stderr}"}
 
-    # 2. Create features.db for pipeline tracking
+    # 2. Create features.db with Hermes-compatible schema
     features_db = os.path.join(board_dir, "features.db")
     if not os.path.isfile(features_db):
         conn = sqlite3.connect(features_db)
