@@ -248,6 +248,60 @@ def _create_profile(
         return False
 
 
+def _ensure_profile_stitch_mcp(profile_name: str):
+    """Add Stitch MCP server config to a profile's config.yaml."""
+    profile_dir = os.path.expanduser(f"~/.hermes/profiles/{profile_name}")
+    config_path = os.path.join(profile_dir, "config.yaml")
+    if not os.path.isfile(config_path):
+        return
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    if "mcp_servers" in cfg and "stitch" in cfg.get("mcp_servers", {}):
+        return  # already configured
+    # Read stitch key from the main Hermes config or from any existing design profile
+    stitch_key = _get_stitch_api_key()
+    if not stitch_key:
+        print("  ⚠️  STITCH_API_KEY introuvable — MCP Stitch non ajouté")
+        return
+    cfg.setdefault("mcp_servers", {})
+    cfg["mcp_servers"]["stitch"] = {
+        "command": "npx",
+        "args": ["@_davideast/stitch-mcp", "proxy"],
+        "env": {"STITCH_API_KEY": stitch_key},
+        "timeout": 300,
+    }
+    with open(config_path, "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False)
+    print(f"  ✅ MCP Stitch ajouté au profil {profile_name}")
+
+
+def _get_stitch_api_key() -> str | None:
+    """Read STITCH_API_KEY from the main Hermes config.yaml."""
+    hermes_cfg = os.path.expanduser("~/.hermes/config.yaml")
+    if os.path.isfile(hermes_cfg):
+        with open(hermes_cfg) as f:
+            cfg = yaml.safe_load(f) or {}
+        try:
+            return cfg["mcp_servers"]["stitch"]["env"]["STITCH_API_KEY"]
+        except (KeyError, TypeError):
+            pass
+    # Fallback: scan existing design profiles
+    profiles_dir = os.path.expanduser("~/.hermes/profiles")
+    if os.path.isdir(profiles_dir):
+        for d in sorted(os.listdir(profiles_dir)):
+            p = os.path.join(profiles_dir, d, "config.yaml")
+            if os.path.isfile(p):
+                with open(p) as f:
+                    try:
+                        pcfg = yaml.safe_load(f) or {}
+                        key = pcfg.get("mcp_servers", {}).get("stitch", {}).get("env", {}).get("STITCH_API_KEY")
+                        if key:
+                            return key
+                    except Exception:
+                        continue
+    return None
+
+
 PRODUCT_SOUL = """Tu es le **Product Manager / Explorateur** pour ce projet.
 
 ## Mission
@@ -1439,9 +1493,13 @@ async def api_create_profile_from_template(name: str, request: Request):
     # 2. Create Hermes profile
     prof_created = _create_profile(profile_name, work_dir, role, project_name, soul_content)
 
+    # 2b. Add Stitch MCP config if template is design-stitch
+    bind_skills = tmpl.get("bind_skills", [])
+    if prof_created and ("stitch" in name.lower() or "stitch" in str(bind_skills).lower()):
+        _ensure_profile_stitch_mcp(profile_name)
+
     # 3. Create or get bundle for this role
     bundle_name = tmpl.get("bundle_name", "")
-    bind_skills = tmpl.get("bind_skills", [])
     if bind_skills and not bundle_name:
         # Create an auto-bundle for this role's skills
         auto_bundle = add_bundle(
