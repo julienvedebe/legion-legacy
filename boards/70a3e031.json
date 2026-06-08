@@ -1,0 +1,33 @@
+{
+  "id": "70a3e031",
+  "name": "B&S",
+  "description": "",
+  "columns": [
+    {
+      "id": "todo",
+      "name": "\u00c0 faire",
+      "color": "#ef4444",
+      "cards": [
+        {
+          "id": "6642dadc",
+          "title": "test",
+          "description": "",
+          "assignee": "",
+          "labels": []
+        }
+      ]
+    },
+    {
+      "id": "doing",
+      "name": "En cours",
+      "color": "#f97316",
+      "cards": []
+    },
+    {
+      "id": "done",
+      "name": "Fait",
+      "color": "#22c55e",
+      "cards": []
+    }
+  ]
+}

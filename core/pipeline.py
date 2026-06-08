@@ -242,9 +242,11 @@ def find_last_done_card(cursor, prefix: str, slug: str):
 
 # ── Card creation ──
 
-def create_card(title: str, profile: str, parent_id: str | None, board: str, body: str | None = None) -> tuple[str, str, int]:
+def create_card(title: str, profile: str, parent_id: str | None, board: str, body: str | None = None, work_dir: str | None = None) -> tuple[str, str, int]:
     """Create a Kanban card via `hermes kanban create`."""
-    cmd = f"HERMES_KANBAN_BOARD={board} hermes kanban create --assignee {profile} --initial-status running"
+    cmd = f"HERMES_KANBAN_BOARD={board} /home/hermes/.local/bin/hermes kanban create --assignee {profile} --initial-status running"
+    if work_dir:
+        cmd += f' --workspace dir:{work_dir}'
     if body:
         escaped = body.replace('"', '\\"').replace("\n", "\\n")
         cmd += f' --body "{escaped}"'
@@ -418,7 +420,7 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
     )
 
     title = f"[{stage}] {name}"
-    stdout, stderr, rc = create_card(title, profile, parent_id, board, body=body)
+    stdout, stderr, rc = create_card(title, profile, parent_id, board, body=body, work_dir=work_dir)
 
     if rc == 0:
         match = re.search(r"(t_[a-z0-9]+)", stdout)

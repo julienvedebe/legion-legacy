@@ -1,0 +1,39 @@
+<div class="boards-wrap">
+    <div class="boards-header">
+        <h2>📋 Boards</h2>
+        <button class="wiki-btn-save" onclick="openCreateBoard()" style="margin-left:auto">+ Nouveau board</button>
+    </div>
+    <div class="boards-list">%%BOARD_ITEMS%%</div>
+</div>
+<style>%%BOARD_CSS%%</style>
+<script>
+function openCreateBoard() {
+    var m = document.getElementById('boardModal');
+    m.innerHTML = `
+        <div class="board-modal">
+            <h3>Nouveau board</h3>
+            <form onsubmit="return createBoard(event)">
+                <label>Nom</label>
+                <input type="text" name="name" required placeholder="Ex: Marketing Q3" autofocus>
+                <label>Description</label>
+                <textarea name="description" placeholder="Optionnel"></textarea>
+                <div class="modal-btns">
+                    <button type="button" class="btn-secondary" onclick="closeModal()">Annuler</button>
+                    <button type="submit" class="btn-primary">Créer</button>
+                </div>
+            </form>
+        </div>
+    `;
+    m.className = 'board-modal-bg show';
+}
+function createBoard(e) {
+    e.preventDefault();
+    var fd = new FormData(e.target);
+    fetch('/api/boards', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:fd.get('name'), description:fd.get('description')})})
+        .then(function(r){return r.json()})
+        .then(function(d){if(d.success) location.href='/boards/'+d.id;});
+    return false;
+}
+function closeModal() { document.getElementById('boardModal').className = 'board-modal-bg'; }
+</script>
+<div id="boardModal" class="board-modal-bg" onclick="if(event.target===this)closeModal()"></div>
