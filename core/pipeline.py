@@ -176,43 +176,44 @@ def detect_initial_stage(work_dir: str, slug: str, stage_order: list, doc_patter
 
 # ── Stage card lookup ──
 
-def find_stage_cards(cursor, stage: str, prefix: str, slug: str):
-    """Find existing Kanban cards for a given stage + feature."""
-    for pat in [
-        f"%[{stage}]%{prefix}%",
-        f"%{stage}%{prefix}%",
-        f"%{stage}%{slug.replace('-', ' ')}%",
-    ]:
-        cursor.execute(
-            """SELECT id, title, status FROM tasks
-               WHERE title LIKE ? AND status NOT IN ('archived')
-               ORDER BY created_at DESC LIMIT 3""",
-            (pat,),
-        )
-        cards = cursor.fetchall()
-        if cards:
-            return cards
-    # Fallback: match on individual slug parts
-    parts = slug.replace("-", " ").split()
-    for part in parts[:3]:
-        if len(part) > 3:
-            cursor.execute(
-                """SELECT id, title, status FROM tasks
-                   WHERE title LIKE ? AND title LIKE ?
-                   AND status NOT IN ('archived')
-                   ORDER BY created_at DESC LIMIT 3""",
-                (f"%{stage}%", f"%{part}%"),
-            )
-            cards = cursor.fetchall()
-            if cards:
-                return cards
+def find_stage_cards(cursor, stage: str, prefix: str, slug: str, name: str = ""):
+    """Find existing Kanban cards for a given stage + feature.
+    
+    The card title is f'[{stage}] {name}' — name comes from the feature DB,
+    NOT the slug or prefix. So we search by stage keyword and filter in Python.
+    """
+    cursor.execute(
+        """SELECT id, title, status FROM tasks
+           WHERE title LIKE ? AND status NOT IN ('archived')
+           ORDER BY created_at DESC LIMIT 20""",
+        (f"%{stage}%",),
+    )
+    cards = cursor.fetchall()
+    if cards:
+        # Build filter keywords from name (exact title match) and slug parts
+        filter_keywords = set()
+        if name:
+            for w in name.lower().split():
+                if len(w) > 3:
+                    filter_keywords.add(w)
+        slug_words = slug.replace("-", " ").lower().split()
+        for w in slug_words:
+            if len(w) > 3:
+                filter_keywords.add(w)
+        matching = []
+        for cid, title, status in cards:
+            title_lower = title.lower()
+            if any(kw in title_lower for kw in filter_keywords):
+                matching.append((cid, title, status))
+        if matching:
+            return matching
     return []
 
 
 def find_last_done_card(cursor, prefix: str, slug: str):
     """Find the last done card for this feature (used as parent)."""
     patterns = [
-        f"%[{prefix}]%",
+        f"%{prefix}%",
         f"%IMP-{prefix}%",
         f"%{prefix}-%",
         f"%{prefix}:%",
@@ -291,15 +292,39 @@ def advance_stage(board: str, current_stage: str, prefix: str, slug: str, name: 
         set_pipeline_stage(board, prefix, "done")
         print(f"  ✅ Pipeline terminée pour {name} !")
         print(f"     Marqué comme done dans feature_meta.")
+        _update_feature_status_in_legion_db(slug, project_slug, "done")
     else:
         next_stage = stage_order[idx]
         set_pipeline_stage(board, prefix, next_stage)
         print(f"  ▶ Prochain stage: {stage_label(next_stage)}")
+        _update_feature_status_in_legion_db(slug, project_slug, next_stage)
         print(f"     Lance 'legion pipeline <project> {prefix}' pour continuer.")
 
     # Post-advance hooks
     if current_stage == "DESIGN" and work_dir and project_slug:
         run_stitch_export(work_dir, project_slug)
+
+
+def _update_feature_status_in_legion_db(slug: str, project_slug: str, stage: str):
+    """Sync pipeline stage -> features.status dans legion.db (dashboard web)."""
+    STAGE_TO_STATUS = {
+        "EXPLORE": "exploration",
+        "SPEC": "spec",
+        "DESIGN": "design",
+        "ARCHITECT": "architect",
+        "IMPLEMENT": "implement",
+        "TEST": "test",
+        "done": "done",
+    }
+    status = STAGE_TO_STATUS.get(stage, stage.lower())
+    try:
+        leg_db = sqlite3.connect(str(Path.home() / ".legion" / "db" / "legion.db"))
+        leg_db.execute("UPDATE features SET status=? WHERE slug=?", (status, slug))
+        leg_db.commit()
+        leg_db.close()
+        print(f"  ✅ Statut feature '{slug}' -> '{status}' dans legion.db")
+    except Exception as e:
+        print(f"  ⚠️  Impossible de mettre a jour legion.db: {e}")
 
 
 # ── Reset ──
@@ -389,7 +414,7 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
         print(f"  ▶ Stade actuel (prochaine carte à créer)\n")
 
     # 6. Check if a card for this stage already exists
-    found_cards = find_stage_cards(c, stage, prefix, slug)
+    found_cards = find_stage_cards(c, stage, prefix, slug, name=name)
     if found_cards:
         card_id, card_title, card_status = found_cards[0]
         if card_status == "todo":
@@ -408,7 +433,9 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False) -> int:
             print(f"ℹ️  Carte {stage_label(stage)} déjà faite — advancement automatique")
             advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
             conn.close()
-            return 0
+            # Récurse pour créer la carte du PROCHAIN stage (sinon l'user ne voit rien)
+            print(f"     → Création de la carte pour le nouveau stage...\n")
+            return run_pipeline(project_slug, prefix)
         else:
             print(f"ℹ️  Carte en statut {card_status} — rien à faire")
             conn.close()
