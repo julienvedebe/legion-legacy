@@ -2042,14 +2042,22 @@ async def api_features(slug: str):
 
 
 @app.post("/api/{slug}/pipeline/{prefix}")
-async def api_pipeline(slug: str, prefix: str):
-    """Run legion pipeline for a feature using centralized pipeline engine."""
+async def api_pipeline(slug: str, prefix: str, skip_stages: str = ""):
+    """Run legion pipeline for a feature using centralized pipeline engine.
+    Optional query param: ?skip_stages=DESIGN (comma-separated)
+    """
     import subprocess
     import sys
-    print(f"[PIPELINE] Request: slug={slug}, prefix={prefix}")
-    
+    print(f"[PIPELINE] Request: slug={slug}, prefix={prefix}, skip_stages={skip_stages}")
+
     pipeline_script = os.path.expanduser("~/.legion/core/pipeline.py")
-    print(f"[PIPELINE] Running centralized: python3 {pipeline_script} {slug} {prefix.upper()}")
+    cmd = [sys.executable, pipeline_script, slug, prefix.upper()]
+    if skip_stages:
+        for s in skip_stages.split(","):
+            s = s.strip().upper()
+            if s:
+                cmd.extend(["--skip-stage", s])
+    print(f"[PIPELINE] Running: {' '.join(cmd)}")
     
     try:
         result = subprocess.run(

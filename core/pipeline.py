@@ -337,9 +337,13 @@ def reset_pipeline(board: str, prefix: str, stage_order: list):
 # Main run
 # ═══════════════════════════════════════════════════════════════
 
-def run_pipeline(project_slug: str, prefix: str, reset: bool = False, _card_just_advanced: bool = False) -> int:
-    """Run the pipeline for a feature. Returns exit code."""
+def run_pipeline(project_slug: str, prefix: str, reset: bool = False, _card_just_advanced: bool = False, skip_stages: list | None = None) -> int:
+    """Run the pipeline for a feature. Returns exit code.
+
+    skip_stages: list of stage names (e.g. ['DESIGN']) to skip without creating cards.
+    """
     prefix = prefix.upper()
+    skip_stages = skip_stages or []
 
     # 1. Load project
     proj = get_project(project_slug)
@@ -410,6 +414,13 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False, _card_just
         idx = stage_order.index(stage) + 1 if stage in stage_order else 1
         print(f"  ▶ [{idx}/{len(stage_order)}] {stage_label(stage)}")
         print(f"  ▶ Stade actuel (prochaine carte à créer)\n")
+
+    # 6a. Skip stage if requested (e.g., skip DESIGN for a CLI tool)
+    if stage in skip_stages:
+        print(f"  ⏭ Stage {stage_label(stage)} skipped")
+        conn.close()
+        advance_stage(board, stage, prefix, slug, name, stage_order, work_dir=work_dir, project_slug=project_slug)
+        return run_pipeline(project_slug, prefix, _card_just_advanced=True, skip_stages=skip_stages)
 
     # 6. Check if a card for this stage already exists
     found_cards = find_stage_cards(c, stage, prefix, slug, name=name)
@@ -513,9 +524,11 @@ def main():
     parser.add_argument("project", help="Slug du projet (ex: skull-game)")
     parser.add_argument("prefix", help="Préfixe de la feature (ex: AUTH)")
     parser.add_argument("--reset", action="store_true", help="Réinitialiser la pipeline")
+    parser.add_argument("--skip-stage", action="append", dest="skip_stages",
+                        help="Sauter un stage (ex: --skip-stage DESIGN). Peut être répété.")
     args = parser.parse_args()
 
-    sys.exit(run_pipeline(args.project, args.prefix.upper(), reset=args.reset))
+    sys.exit(run_pipeline(args.project, args.prefix.upper(), reset=args.reset, skip_stages=args.skip_stages))
 
 
 if __name__ == "__main__":
