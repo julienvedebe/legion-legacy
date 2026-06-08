@@ -479,7 +479,7 @@ def run_pipeline(project_slug: str, prefix: str, reset: bool = False, skip_stage
         slug=slug, prefix=prefix, name=name, work_dir=work_dir,
     )
 
-    title = f"[{stage}] {name}"
+    title = f"[{stage}] {prefix}: {name}"
     stdout, stderr, rc = create_card(title, profile, parent_id, board, body=body, work_dir=work_dir)
 
     if rc == 0:
