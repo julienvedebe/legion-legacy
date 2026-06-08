@@ -185,26 +185,14 @@ def find_stage_cards(cursor, stage: str, prefix: str, slug: str, name: str = "")
     cursor.execute(
         """SELECT id, title, status FROM tasks
            WHERE title LIKE ? AND status NOT IN ('archived')
-           ORDER BY created_at DESC LIMIT 20""",
-        (f"%{stage}%",),
+           ORDER BY created_at DESC LIMIT 5""",
+        (f"[{stage}] {prefix}%",),
     )
     cards = cursor.fetchall()
     if cards:
-        # Build filter keywords from name (exact title match) and slug parts
-        filter_keywords = set()
-        if name:
-            for w in name.lower().split():
-                if len(w) > 3:
-                    filter_keywords.add(w)
-        slug_words = slug.replace("-", " ").lower().split()
-        for w in slug_words:
-            if len(w) > 3:
-                filter_keywords.add(w)
         matching = []
         for cid, title, status in cards:
-            title_lower = title.lower()
-            if any(kw in title_lower for kw in filter_keywords):
-                matching.append((cid, title, status))
+            matching.append((cid, title, status))
         if matching:
             return matching
     return []
