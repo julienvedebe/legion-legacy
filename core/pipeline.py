@@ -36,7 +36,7 @@ HERMES_HOME = Path.home() / ".hermes"
 DEFAULT_STAGE_ORDER = ["EXPLORE", "SPEC", "DESIGN", "ARCHITECT", "IMPLEMENT"]
 DEFAULT_STAGE_DOC_PATTERNS = {
     "EXPLORE": "docs/product/exploration-{slug}.md",
-    "SPEC": "docs/product/fonctionnalite-{slug}.md",
+    "SPEC": "docs/product/spec-{slug}.md",
     "DESIGN": "docs/design/design-{slug}.md",
     "ARCHITECT": "docs/architecture/archi-{slug}.md",
 }
